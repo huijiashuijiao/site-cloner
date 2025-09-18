@@ -1,5 +1,8 @@
 package com.example.sitecloner.model;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class CrawlRequest {
 
 	private String startUrl;
@@ -17,6 +20,12 @@ public class CrawlRequest {
 
 	// 调试：仅下载首页及其资源
 	private boolean debugOnlyHome = false;
+
+	// 站点地图域名（用于生成 sitemap.xml 的 <loc> 前缀）
+	private String sitemapDomain;
+
+	// 文本替换规则（按顺序应用）
+	private List<ReplacementRule> replaceRules = new ArrayList<>();
 
 	public String getStartUrl() {
 		return startUrl;
@@ -72,6 +81,22 @@ public class CrawlRequest {
 
 	public void setTitleSuffix(String titleSuffix) {
 		this.titleSuffix = titleSuffix;
+	}
+
+	public String getSitemapDomain() {
+		return sitemapDomain;
+	}
+
+	public void setSitemapDomain(String sitemapDomain) {
+		this.sitemapDomain = sitemapDomain;
+	}
+
+	public List<ReplacementRule> getReplaceRules() {
+		return replaceRules;
+	}
+
+	public void setReplaceRules(List<ReplacementRule> replaceRules) {
+		this.replaceRules = replaceRules;
 	}
 }
 

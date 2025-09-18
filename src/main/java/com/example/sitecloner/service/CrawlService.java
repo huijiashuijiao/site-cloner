@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -43,18 +44,10 @@ public class CrawlService {
     private static final Pattern QUOTED_ASSET_PATTERN = Pattern.compile("['\\\"]((?:https?://|/)[^'\\\"]+\\.(?:png|jpe?g|gif|webp|svg|ico))(?:\\?[^'\\\"]*)?['\\\"]", Pattern.CASE_INSENSITIVE);
     // 正则：宽松匹配 JS 文本中未必被引号包裹的图片 URL 片段
     private static final Pattern JS_IMG_TOKEN_PATTERN = Pattern.compile("((?:https?://|/)[^\\s'\"<>]+\\.(?:png|jpe?g|gif|webp|svg|ico))(?:\\?[^\\s'\"<>]*)?", Pattern.CASE_INSENSITIVE);
-    // 正则：定位 JS 字符串中的 href="..." 或 src="..."（用于 HTML 片段）
-    private static final Pattern HREF_SRC_ATTR_PATTERN = Pattern.compile("(href|src)\\s*=\\s*(['\\\"])((?:https?://|/)[^'\\\"\\s<>]+)\\2", Pattern.CASE_INSENSITIVE);
-    // 正则：定位 JS 字符串中的 href=\"...\" 或 src=\"...\"（转义引号场景）
-    private static final Pattern ESC_HREF_SRC_ATTR_PATTERN = Pattern.compile("(href|src)\\s*=\\s*\\\\(['\\\"])((?:https?://|/)[^\\\\'\\\"\\s<>]+)\\\\\\\2", Pattern.CASE_INSENSITIVE);
     // 正则：定位 JS 中的 location.href = '...'
     private static final Pattern JS_LOC_HREF_PATTERN = Pattern.compile("(?:window\\.)?location\\.href\\s*=\\s*(['\\\"])((?:https?://|/)[^'\\\"\\s<>]+)\\1", Pattern.CASE_INSENSITIVE);
-    // 正则：定位 JS 字符串中的 href=\"...\"（转义引号）
-    private static final Pattern JS_LOC_HREF_ESC_PATTERN = Pattern.compile("(?:window\\.)?location\\.href\\s*=\\s*\\\\(['\\\"])((?:https?://|/)[^\\\\'\\\"\\s<>]+)\\\\\\\1", Pattern.CASE_INSENSITIVE);
     // 正则：定位 JS 中的 window.open('...'
     private static final Pattern JS_WINDOW_OPEN_PATTERN = Pattern.compile("window\\.open\\(\\s*(['\\\"])((?:https?://|/)[^'\\\"\\s<>]+)\\1", Pattern.CASE_INSENSITIVE);
-    // 正则：定位 JS 中的 window.open(\"...\"（转义引号）
-    private static final Pattern JS_WINDOW_OPEN_ESC_PATTERN = Pattern.compile("window\\.open\\(\\s*\\\\(['\\\"])((?:https?://|/)[^\\\\'\\\"\\s<>]+)\\\\\\\1", Pattern.CASE_INSENSITIVE);
     // 正则：定位 JS 字符串中的 href="..."、src="..."、action="..."（用于 HTML 片段，非转义）
     private static final Pattern ATTR_NONESC_PATTERN = Pattern.compile("(href|src|action)\\s*=\\s*(['\\\"])((?:https?://|/)[^'\\\"\\s<>]+)\\2", Pattern.CASE_INSENSITIVE);
     // 正则：定位 JS 字符串中的 href=\"...\"、src=\"...\"、action=\"...\"（转义引号）
@@ -74,6 +67,13 @@ public class CrawlService {
 			Files.createDirectories(outputDir);
 
 			breadthFirstCrawl(startUri, baseHost, request, outputDir, result);
+
+            // 生成 sitemap.xml（放在站点根：outputDir/<host>/sitemap.xml）
+            try {
+                generateSitemap(outputDir, baseHost, request, result);
+            } catch (Exception e) {
+                result.addError("生成 sitemap.xml 失败: " + e.getMessage());
+            }
 
 			result.setOutputDirectory(outputDir.toAbsolutePath().toString());
 		} catch (Exception e) {
@@ -132,6 +132,7 @@ public class CrawlService {
 				Path localHtmlPath = mapUriToLocalPath(outputDir, uri, true);
 				Files.createDirectories(localHtmlPath.getParent());
                 rewriteAndSaveHtml(doc, uri, outputDir, localHtmlPath, request, result);
+                result.addPage(uri.toString());
 				pages++;
 				result.setPagesDownloaded(pages);
 
@@ -212,6 +213,7 @@ public class CrawlService {
                             .execute();
                     String cssText = new String(resp.bodyAsBytes(), StandardCharsets.UTF_8);
                     String rewritten = rewriteCssUrls(cssText, resUri, outputDir, resLocal, result);
+                    rewritten = applyReplacements(rewritten, request);
                     Files.write(resLocal, rewritten.getBytes(StandardCharsets.UTF_8));
                     result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
                 } else {
@@ -220,6 +222,7 @@ public class CrawlService {
                         String jsText = new String(bytes, StandardCharsets.UTF_8);
                         // 先重写 JS 内的跳转链接（外链→/，站内→相对路径并去掉 index.html）
                         String jsRewritten = rewriteJsLinksInContent(jsText, pageUri, outputDir, localHtmlPath, result);
+                        jsRewritten = applyReplacements(jsRewritten, request);
                         // 保存 JS
                         Files.write(resLocal, jsRewritten.getBytes(StandardCharsets.UTF_8));
                         result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
@@ -243,8 +246,8 @@ public class CrawlService {
             }
 		}
 
-        // 处理内联样式与 <style> 块中的背景图片
-        processInlineStyles(doc, pageUri, outputDir, localHtmlPath, result);
+        // 处理内联样式与 <style> 块中的背景图片（并应用替换）
+        processInlineStyles(doc, pageUri, outputDir, localHtmlPath, result, request);
 
         // 处理 img[srcset] 与懒加载属性
         for (Element img : doc.select("img")) {
@@ -386,8 +389,18 @@ public class CrawlService {
             doc.body().insertChildren(0, org.jsoup.parser.Parser.parseFragment("<h1>" + org.jsoup.nodes.Entities.escape(newTitle) + "</h1>", doc.body(), doc.baseUri()));
         }
 
-        // 统一将页面保存为 index.html 或 .html
-        byte[] htmlBytes = doc.outerHtml().getBytes(StandardCharsets.UTF_8);
+        // 在 body 尾部追加网站地图链接（去重）
+        if (doc.body() != null) {
+            Element existing = doc.selectFirst("body a[href='/sitemap.xml']");
+            if (existing == null) {
+                doc.body().appendElement("a").attr("href", "/sitemap.xml").text("网站地图");
+            }
+        }
+
+        // 保存页面（应用文本替换）
+        String htmlOut = doc.outerHtml();
+        htmlOut = applyReplacements(htmlOut, request);
+        byte[] htmlBytes = htmlOut.getBytes(StandardCharsets.UTF_8);
         Files.write(localHtmlPath, htmlBytes);
 	}
 
@@ -395,12 +408,14 @@ public class CrawlService {
                                      URI pageUri,
                                      Path outputDir,
                                      Path localHtmlPath,
-                                     CrawlResult result) {
+                                     CrawlResult result,
+                                     CrawlRequest request) {
         // style 属性
         for (Element el : doc.select("*[style]")) {
             String style = el.attr("style");
             if (isBlank(style)) continue;
             String rewritten = rewriteCssUrls(style, pageUri, outputDir, localHtmlPath, result);
+            rewritten = applyReplacements(rewritten, request);
             el.attr("style", rewritten);
         }
         // <style> 标签内容
@@ -409,6 +424,7 @@ public class CrawlService {
             if (isBlank(css)) css = st.html();
             if (isBlank(css)) continue;
             String rewritten = rewriteCssUrls(css, pageUri, outputDir, localHtmlPath, result);
+            rewritten = applyReplacements(rewritten, request);
             st.text(rewritten);
         }
     }
@@ -458,6 +474,64 @@ public class CrawlService {
         return sb.toString();
     }
 
+    // 文本替换（按顺序应用），为空时直接返回原文
+    private String applyReplacements(String text, CrawlRequest request) {
+        if (text == null || request == null || request.getReplaceRules() == null) return text;
+        String out = text;
+        for (com.example.sitecloner.model.ReplacementRule r : request.getReplaceRules()) {
+            if (r == null) continue;
+            String find = r.getFind();
+            String repl = r.getReplaceWith();
+            if (find == null || find.isEmpty() || repl == null) continue;
+            out = out.replace(find, repl);
+        }
+        return out;
+    }
+
+    // 生成 sitemap.xml
+    private void generateSitemap(Path outputDir,
+                                 String host,
+                                 CrawlRequest request,
+                                 CrawlResult result) throws IOException {
+        if (host == null) host = "unknown-host";
+        Path siteRoot = outputDir.resolve(host);
+        Files.createDirectories(siteRoot);
+        String domain = request.getSitemapDomain();
+        if (isBlank(domain)) {
+            domain = "https://" + host;
+        }
+        domain = domain.trim();
+        if (domain.endsWith("/")) domain = domain.substring(0, domain.length() - 1);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        sb.append("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
+        String today = LocalDate.now().toString();
+        for (String absUrl : result.getPages()) {
+            try {
+                URI u = new URI(absUrl);
+                String path = u.getPath();
+                if (isBlank(path)) path = "/";
+                // 目录页标准化：以 / 结尾
+                if (!path.contains(".") && !path.endsWith("/")) path = path + "/";
+                String loc = domain + path;
+                sb.append("  <url>\n");
+                sb.append("    <loc").append(">").append(escapeXml(loc)).append("</loc>\n");
+                sb.append("    <lastmod").append(">").append(today).append("</lastmod>\n");
+                sb.append("    <changefreq>weekly</changefreq>\n");
+                sb.append("    <priority>0.5</priority>\n");
+                sb.append("  </url>\n");
+            } catch (Exception ignore) {}
+        }
+        sb.append("</urlset>\n");
+        Files.write(siteRoot.resolve("sitemap.xml"), sb.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String escapeXml(String s) {
+        if (s == null) return "";
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;");
+    }
+
     // 将 JS 字符串中的 URL 做清洗（去反斜杠、解转义）
     private static String sanitizeJsUrl(String s) {
         if (s == null) return null;
@@ -480,13 +554,6 @@ public class CrawlService {
                                           CrawlResult result) {
         String text = jsText;
 
-        int attrMatches = 0, attrRewrites = 0, attrSkips = 0;
-        int locMatches = 0, locRewrites = 0, locSkips = 0;
-        int openMatches = 0, openRewrites = 0, openSkips = 0;
-        int escAttrMatches = 0, escAttrRewrites = 0, escAttrSkips = 0;
-        int escLocMatches = 0, escLocRewrites = 0, escLocSkips = 0;
-        int escOpenMatches = 0, escOpenRewrites = 0, escOpenSkips = 0;
-
         // 处理 HTML 片段中的 href/src/action 属性（非转义）
         Matcher mAttr = ATTR_NONESC_PATTERN.matcher(text);
         StringBuffer attrBuf = new StringBuffer();
@@ -495,7 +562,6 @@ public class CrawlService {
             String quote = mAttr.group(2);
             String rawUrl = sanitizeJsUrl(mAttr.group(3));
             String replacement = mAttr.group();
-            attrMatches++;
             try {
                 URI abs = resolveAssetUri(rawUrl, pageUri, pageUri);
                 String pageHost = pageUri.getHost();
@@ -505,7 +571,6 @@ public class CrawlService {
                 if (isLikelyHtml(abs)) result.addJsPage(abs.toString());
                 if (pageHost != null && targetHost != null && !targetHost.equalsIgnoreCase(pageHost)) {
                     replacement = attr + "=" + q + "/" + q;
-                    attrRewrites++;
                 } else {
                     Path targetLocal = mapUriToLocalPath(outputDir, abs, true);
                     Files.createDirectories(targetLocal.getParent());
@@ -516,10 +581,9 @@ public class CrawlService {
                         rel = "/";
                     }
                     replacement = attr + "=" + q + rel + q;
-                    attrRewrites++;
                 }
             } catch (Exception ex) {
-                attrSkips++;
+                // skip
             }
             mAttr.appendReplacement(attrBuf, Matcher.quoteReplacement(replacement));
         }
@@ -533,7 +597,6 @@ public class CrawlService {
             String attr = mEscAttr.group(1);
             String rawUrl = sanitizeJsUrl(mEscAttr.group(2));
             String replacement = mEscAttr.group();
-            escAttrMatches++;
             try {
                 URI abs = resolveAssetUri(rawUrl, pageUri, pageUri);
                 String pageHost = pageUri.getHost();
@@ -542,7 +605,6 @@ public class CrawlService {
                 if (isLikelyHtml(abs)) result.addJsPage(abs.toString());
                 if (pageHost != null && targetHost != null && !targetHost.equalsIgnoreCase(pageHost)) {
                     replacement = attr + "=" + escapedQuote + "/" + escapedQuote;
-                    escAttrRewrites++;
                 } else {
                     Path targetLocal = mapUriToLocalPath(outputDir, abs, true);
                     Files.createDirectories(targetLocal.getParent());
@@ -553,10 +615,9 @@ public class CrawlService {
                         rel = "/";
                     }
                     replacement = attr + "=" + escapedQuote + rel + escapedQuote;
-                    escAttrRewrites++;
                 }
             } catch (Exception ex) {
-                escAttrSkips++;
+                // skip
             }
             mEscAttr.appendReplacement(escAttrBuf, Matcher.quoteReplacement(replacement));
         }
@@ -570,7 +631,6 @@ public class CrawlService {
             String quote = mLoc.group(1);
             String rawUrl = sanitizeJsUrl(mLoc.group(2));
             String replacement = mLoc.group();
-            locMatches++;
             try {
                 URI abs = resolveAssetUri(rawUrl, pageUri, pageUri);
                 String pageHost = pageUri.getHost();
@@ -579,7 +639,6 @@ public class CrawlService {
                 if (isLikelyHtml(abs)) result.addJsPage(abs.toString());
                 if (pageHost != null && targetHost != null && !targetHost.equalsIgnoreCase(pageHost)) {
                     replacement = "location.href=" + escapedQuote + "/" + escapedQuote;
-                    locRewrites++;
                 } else {
                     Path targetLocal = mapUriToLocalPath(outputDir, abs, true);
                     Files.createDirectories(targetLocal.getParent());
@@ -590,10 +649,9 @@ public class CrawlService {
                         rel = "/";
                     }
                     replacement = "location.href=" + escapedQuote + rel + escapedQuote;
-                    locRewrites++;
                 }
             } catch (Exception ex) {
-                locSkips++;
+                // skip
             }
             mLoc.appendReplacement(locBuf, Matcher.quoteReplacement(replacement));
         }
@@ -607,7 +665,6 @@ public class CrawlService {
             String quote = mOpen.group(1);
             String rawUrl = sanitizeJsUrl(mOpen.group(2));
             String replacement = mOpen.group();
-            openMatches++;
             try {
                 URI abs = resolveAssetUri(rawUrl, pageUri, pageUri);
                 String pageHost = pageUri.getHost();
@@ -616,7 +673,6 @@ public class CrawlService {
                 if (isLikelyHtml(abs)) result.addJsPage(abs.toString());
                 if (pageHost != null && targetHost != null && !targetHost.equalsIgnoreCase(pageHost)) {
                     replacement = "window.open(" + escapedQuote + "/" + escapedQuote;
-                    openRewrites++;
                 } else {
                     Path targetLocal = mapUriToLocalPath(outputDir, abs, true);
                     Files.createDirectories(targetLocal.getParent());
@@ -627,43 +683,24 @@ public class CrawlService {
                         rel = "/";
                     }
                     replacement = "window.open(" + escapedQuote + rel + escapedQuote;
-                    openRewrites++;
                 }
             } catch (Exception ex) {
-                openSkips++;
+                // skip
             }
             mOpen.appendReplacement(openBuf, Matcher.quoteReplacement(replacement));
         }
         mOpen.appendTail(openBuf);
         text = openBuf.toString();
 
-        // 简化替换（最后兜底）：仅做 index.html 规范化，避免误将同域 http 替换为 /
-        int simpleCount = 0;
-        String before;
-        before = text;
-        // 不再进行 http(s) 外链的无差别替换，改由上面的规则判定域名
-        if (!text.equals(before)) simpleCount++;
-        before = text;
-        // 同上，避免误伤
-        if (!text.equals(before)) simpleCount++;
-        before = text;
-        // 同上，避免误伤（location/window.open 已在规则中处理了域名判断）
-        if (!text.equals(before)) simpleCount++;
-        before = text;
-        // 同上
-        if (!text.equals(before)) simpleCount++;
-        before = text;
+        // 简化替换：仅做 index.html 规范化
         text = text.replaceAll("(?i)href=\"(/[^\"]*?)/index\\.html\"", "href=\"$1/\"");
         text = text.replaceAll("(?i)href='(/[^']*?)/index\\.html'", "href='$1/'");
         text = text.replaceAll("(?i)src=\"(/[^\"]*?)/index\\.html\"", "src=\"$1/\"");
         text = text.replaceAll("(?i)src='(/[^']*?)/index\\.html'", "src='$1/'");
-        if (!text.equals(before)) simpleCount++;
-        before = text;
         text = text.replaceAll("(?i)href=\\\\\"(/[^\\\\\"]*?)/index\\.html\\\\\"", "href=\\\\\"$1/\\\\\"");
         text = text.replaceAll("(?i)href=\\\\'(/[^\\\\']*?)/index\\.html\\\\'", "href=\\\\'$1/\\\\'");
         text = text.replaceAll("(?i)src=\\\\\"(/[^\\\\\"]*?)/index\\.html\\\\\"", "src=\\\\\"$1/\\\\\"");
         text = text.replaceAll("(?i)src=\\\\'(/[^\\\\']*?)/index\\.html\\\\'", "src=\\\\'$1/\\\\'");
-        System.out.println("[JS-SIMPLE][SUMMARY] passesApplied=" + simpleCount);
 
         // 简单页面 URL 收集：/col/.../index.html 或 /col/.../ 视为页面
         collectJsPages(text, pageUri, result);

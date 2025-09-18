@@ -11,6 +11,8 @@
         .card { box-shadow: 0 2px 8px rgba(0,0,0,.05); }
         .form-text { color:#6c757d; }
         .btn-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        .rule-row { display:flex; gap:8px; margin-bottom:8px; }
+        .rule-row input { flex:1; }
     </style>
     <!-- 回退：若无 webjars，本地样式也可省略 -->
 </head>
@@ -49,6 +51,22 @@
                     <input class="form-control" th:field="*{titleSuffix}" placeholder="例如：凯发娱乐"/>
                     <div class="form-text">用于将每页标题改为“原标题-后缀”，并在 body 顶部插入 H1。</div>
                 </div>
+                <div class="mb-3">
+                    <label class="form-label">Sitemap 域名</label>
+                    <input class="form-control" th:field="*{sitemapDomain}" placeholder="例如：https://www.example.com"/>
+                    <div class="form-text">生成 sitemap.xml 时作为 <loc> 的域名前缀，留空则使用起始域名。</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">文字替换规则（可添加多条）</label>
+                    <div id="rules">
+                        <div class="rule-row" th:each="r,i : *{replaceRules}">
+                            <input class="form-control" th:field="*{replaceRules[__${i.index}__].find}" placeholder="原文字 例如：通知"/>
+                            <input class="form-control" th:field="*{replaceRules[__${i.index}__].replaceWith}" placeholder="替换为 例如：娱乐城通知"/>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addRule()">新增一条规则</button>
+                    <div class="form-text">按顺序对 HTML/JS/CSS 文本进行替换。</div>
+                </div>
                 <div class="mb-3 form-check">
                     <input type="checkbox" class="form-check-input" th:field="*{debugOnlyHome}" id="debugOnlyHome">
                     <label class="form-check-label" for="debugOnlyHome">调试模式：只下载首页与首页资源</label>
@@ -61,6 +79,17 @@
         </div>
     </div>
 </div>
+<script>
+function addRule(){
+    var container = document.getElementById('rules');
+    var idx = container.children.length;
+    var row = document.createElement('div');
+    row.className = 'rule-row';
+    row.innerHTML = '<input class="form-control" name="replaceRules['+idx+'].find" placeholder="原文字"/>'+
+                    '<input class="form-control" name="replaceRules['+idx+'].replaceWith" placeholder="替换为"/>';
+    container.appendChild(row);
+}
+</script>
 </body>
 </html>
 

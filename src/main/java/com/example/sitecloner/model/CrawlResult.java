@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.TreeSet;
 
 public class CrawlResult {
 
@@ -16,6 +17,9 @@ public class CrawlResult {
 
 	// JS 中识别出的需要下载的页面 URL（绝对地址字符串）
 	private final Set<String> jsPages = new HashSet<>();
+
+	// 已保存的页面（绝对 URL），用于生成 sitemap.xml
+	private final Set<String> pages = new TreeSet<>();
 
 	public String getOutputDirectory() {
 		return outputDirectory;
@@ -64,6 +68,16 @@ public class CrawlResult {
 	public void addJsPage(String url) {
 		if (url != null && !url.isEmpty()) {
 			jsPages.add(url);
+		}
+	}
+
+	public Set<String> getPages() {
+		return pages;
+	}
+
+	public void addPage(String url) {
+		if (url != null && !url.isEmpty()) {
+			pages.add(url);
 		}
 	}
 }
