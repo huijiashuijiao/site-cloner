@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>仿站工具</title>
+    <link rel="stylesheet" th:href="@{/webjars/bootstrap/5.3.3/css/bootstrap.min.css}"/>
+    <style>
+        body { padding: 24px; }
+        .container { max-width: 960px; }
+        .card { box-shadow: 0 2px 8px rgba(0,0,0,.05); }
+        .form-text { color:#6c757d; }
+        .btn-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    </style>
+    <!-- 回退：若无 webjars，本地样式也可省略 -->
+</head>
+<body>
+<div class="container">
+    <h1 class="mb-4">仿站下载</h1>
+    <div class="card mb-3">
+        <div class="card-body">
+            <form method="post" th:action="@{/crawl}" th:object="${form}">
+                <div class="mb-3">
+                    <label class="form-label">起始 URL</label>
+                    <input class="form-control" th:field="*{startUrl}" placeholder="https://example.com"/>
+                    <div class="text-danger" th:if="${#fields.hasErrors('startUrl')}" th:errors="*{startUrl}"></div>
+                </div>
+                <div class="mb-3 form-check">
+                    <input type="checkbox" class="form-check-input" th:field="*{sameDomain}" id="sameDomain">
+                    <label class="form-check-label" for="sameDomain">限制在同域</label>
+                </div>
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">最大深度</label>
+                        <input type="number" min="1" max="20" class="form-control" th:field="*{maxDepth}"/>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">最大页数</label>
+                        <input type="number" min="1" max="10000" class="form-control" th:field="*{maxPages}"/>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">输出文件夹名（可选）</label>
+                    <input class="form-control" th:field="*{outputName}" placeholder="my-site-copy"/>
+                    <div class="form-text">默认：host-时间戳，输出根目录为应用运行目录下的 output/。</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">标题后缀</label>
+                    <input class="form-control" th:field="*{titleSuffix}" placeholder="例如：凯发娱乐"/>
+                    <div class="form-text">用于将每页标题改为“原标题-后缀”，并在 body 顶部插入 H1。</div>
+                </div>
+                <div class="mb-3 form-check">
+                    <input type="checkbox" class="form-check-input" th:field="*{debugOnlyHome}" id="debugOnlyHome">
+                    <label class="form-check-label" for="debugOnlyHome">调试模式：只下载首页与首页资源</label>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" type="submit">开始下载</button>
+                    <a class="btn btn-secondary" href="/debug/rewrite-js?file=test.js" target="_blank">调试JS替换（test.js → test2.js）</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+</body>
+</html>
+
+

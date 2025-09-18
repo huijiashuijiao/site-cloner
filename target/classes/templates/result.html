@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>仿站结果</title>
+    <style>
+        body { padding: 24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", "Apple Color Emoji", "Segoe UI Emoji"; }
+        .container { max-width: 960px; margin: 0 auto; }
+        pre { background: #f7f7f9; padding: 12px; border-radius: 4px; overflow-x: auto; }
+        a { color: #0d6efd; text-decoration: none; }
+    </style>
+    <script>
+        function copyPath() {
+            var el = document.getElementById('outdir');
+            navigator.clipboard.writeText(el.innerText);
+        }
+    </script>
+    </head>
+<body>
+<div class="container">
+    <h1>完成</h1>
+    <p>输出目录：</p>
+    <pre id="outdir" th:text="${result.outputDirectory}"></pre>
+    <button onclick="copyPath()">复制路径</button>
+    <ul>
+        <li>页面数：<span th:text="${result.pagesDownloaded}"></span></li>
+        <li>资源数：<span th:text="${result.assetsDownloaded}"></span></li>
+        <li>耗时：<span th:text="${result.elapsed}"></span></li>
+    </ul>
+    <div th:if="${#lists.size(result.errors) > 0}">
+        <h3>错误</h3>
+        <ul>
+            <li th:each="err : ${result.errors}" th:text="${err}"></li>
+        </ul>
+    </div>
+    <p><a th:href="@{/}">返回</a></p>
+</div>
+</body>
+</html>
+
+
