@@ -40,18 +40,26 @@ public class CrawlService {
 
     // 正则：匹配 CSS/JS 文本中的 url(...) 模式
     private static final Pattern CSS_URL_PATTERN = Pattern.compile("url\\(\\s*(['\\\"]?)([^\\)\\'\\\"]+)\\1\\s*\\)", Pattern.CASE_INSENSITIVE);
-    // 正则：仅匹配 JS 文本中被引号包裹的图片 URL（http(s) 或站内以 / 开头）
-    private static final Pattern QUOTED_ASSET_PATTERN = Pattern.compile("['\\\"]((?:https?://|/)[^'\\\"]+\\.(?:png|jpe?g|gif|webp|svg|ico))(?:\\?[^'\\\"]*)?['\\\"]", Pattern.CASE_INSENSITIVE);
-    // 正则：宽松匹配 JS 文本中未必被引号包裹的图片 URL 片段
-    private static final Pattern JS_IMG_TOKEN_PATTERN = Pattern.compile("((?:https?://|/)[^\\s'\"<>]+\\.(?:png|jpe?g|gif|webp|svg|ico))(?:\\?[^\\s'\"<>]*)?", Pattern.CASE_INSENSITIVE);
+    // 正则：仅匹配 JS 文本中被引号包裹的图片 URL（支持 http(s)、/、\\/、./、../、以及简易相对路径）
+    private static final Pattern QUOTED_ASSET_PATTERN = Pattern.compile("['\\\"]((?:https?://|/|\\\\/|\\./|\\.\\./|[a-zA-Z0-9_./-])[^'\\\"]+\\.(?:png|jpe?g|gif|webp|svg|ico))(?:\\?[^'\\\"]*)?['\\\"]", Pattern.CASE_INSENSITIVE);
+    // 正则：宽松匹配 JS 文本中未必被引号包裹的图片 URL 片段（仅限以 http(s)、/、\\/、./、../ 开头，避免误捕获 CSS 片段），并避免从路径中间起始
+    private static final Pattern JS_IMG_TOKEN_PATTERN = Pattern.compile("(?<![A-Za-z0-9_./-])((?:https?://|/|\\\\/|\\./|\\.\\./)[^\\s'\\\"<>]+\\.(?:png|jpe?g|gif|webp|svg|ico))(?:\\?[^\\s'\\\"<>]*)?", Pattern.CASE_INSENSITIVE);
+    // 正则：匹配 JS 源码中以转义双引号包裹的图片 URL，如 src=\"/a.png\" 或 \"\/a.png\"
+    private static final Pattern ESC_DQ_IMG_PATTERN = Pattern.compile("\\\\\"((?:https?://|/|\\\\/|\\./|\\.\\./)[^\\\\\"\\s<>]+\\.(?:png|jpe?g|gif|webp|svg|ico))(?:\\?[^\\\\\"\\s<>]*)?\\\\\"", Pattern.CASE_INSENSITIVE);
+    // 正则：匹配 JS 源码中以转义单引号包裹的图片 URL，如 src=\'/a.png\' 或 \'\/a.png\'
+    private static final Pattern ESC_SQ_IMG_PATTERN = Pattern.compile("\\\\'((?:https?://|/|\\\\/|\\./|\\.\\./)[^\\\\'\\s<>]+\\.(?:png|jpe?g|gif|webp|svg|ico))(?:\\?[^\\\\'\\s<>]*)?\\\\'", Pattern.CASE_INSENSITIVE);
     // 正则：定位 JS 中的 location.href = '...'
     private static final Pattern JS_LOC_HREF_PATTERN = Pattern.compile("(?:window\\.)?location\\.href\\s*=\\s*(['\\\"])((?:https?://|/)[^'\\\"\\s<>]+)\\1", Pattern.CASE_INSENSITIVE);
     // 正则：定位 JS 中的 window.open('...'
     private static final Pattern JS_WINDOW_OPEN_PATTERN = Pattern.compile("window\\.open\\(\\s*(['\\\"])((?:https?://|/)[^'\\\"\\s<>]+)\\1", Pattern.CASE_INSENSITIVE);
-    // 正则：定位 JS 字符串中的 href="..."、src="..."、action="..."（用于 HTML 片段，非转义）
+    // 正则：定位 JS 字符串中的 href=\"...\"、src=\"...\"、action=\"...\"（用于 HTML 片段，非转义）
     private static final Pattern ATTR_NONESC_PATTERN = Pattern.compile("(href|src|action)\\s*=\\s*(['\\\"])((?:https?://|/)[^'\\\"\\s<>]+)\\2", Pattern.CASE_INSENSITIVE);
-    // 正则：定位 JS 字符串中的 href=\"...\"、src=\"...\"、action=\"...\"（转义引号）
-    private static final Pattern ATTR_ESC_PATTERN = Pattern.compile("(href|src|action)\\s*=\\s*\\\\(?:[\\\"'])((?:https?://|/)[^\\\\'\\\"\\s<>]+)(?:\\\\\\\"|\\\\')", Pattern.CASE_INSENSITIVE);
+    // 正则：定位 JS 字符串中的 href=\\\"...\\\"、src=\\\"...\\\"、action=\\\"...\\\"（转义引号）
+    private static final Pattern ATTR_ESC_PATTERN = Pattern.compile("(href|src|action)\\s*=\\s*\\\\(?:[\\\\\"'])((?:https?://|/)[^\\\\'\\\"\\s<>]+)(?:\\\\\\\"|\\\\')", Pattern.CASE_INSENSITIVE);
+    // 正则：直接匹配 <img ... src="...png">（非转义）
+    private static final Pattern IMG_TAG_SRC_NONESC = Pattern.compile("<img[^>]+src\\s*=\\s*(['\\\"])([^'\\\"\\s<>]+\\.(?:png|jpe?g|gif|webp|svg|ico))(?:\\?[^'\\\"<>]*)?\\1", Pattern.CASE_INSENSITIVE);
+    // 正则：匹配 JS 字符串中的转义形式 <img ... src=\"...png\">
+    private static final Pattern IMG_TAG_SRC_ESC = Pattern.compile("<img[^>]+src\\s*=\\s*\\\\(['\\\"])([^\\\\'\\\"\\s<>]+\\.(?:png|jpe?g|gif|webp|svg|ico))(?:\\?[^\\\\'\\\"<>]*)?\\\\\\1", Pattern.CASE_INSENSITIVE);
 
 	public CrawlResult crawl(CrawlRequest request) {
 		Instant start = Instant.now();
@@ -807,31 +815,112 @@ public class CrawlService {
                                     CrawlResult result) throws IOException {
         String js = new String(jsBytes, StandardCharsets.UTF_8);
         java.util.Set<String> seen = new java.util.HashSet<String>();
-        // 1) 提取 url(...)，仅下载图片
+
+        int cCss = 0, cQuoted = 0, cToken = 0, cEscDq = 0, cEscSq = 0, cDup = 0, cSkipNotImg = 0;
+        System.out.println("[JS-ASSET] scan jsUri=" + (jsUri == null ? "inline" : jsUri) + ", referer=" + (referer == null ? "null" : referer));
+
+        // 1) 提取 url(...)
         Matcher m1 = CSS_URL_PATTERN.matcher(js);
         while (m1.find()) {
             String raw = m1.group(2);
             if (isBlank(raw)) continue;
-            if (!isImagePath(raw)) continue;
-            if (!seen.add(raw)) continue;
+            if (!isImagePath(raw)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][CSSURL] " + raw); continue; }
+            if (!seen.add(raw)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][CSSURL] " + raw); continue; }
+            cCss++; System.out.println("[JS-ASSET][MATCH][CSSURL] " + raw);
             downloadOneAssetFromJs(raw, jsUri, referer, outputDir, currentLocalPath, result, "JS-CSSURL");
         }
-        // 2) 提取引号内的图片路径
+
+        // 2) 引号内图片
         Matcher m2 = QUOTED_ASSET_PATTERN.matcher(js);
         while (m2.find()) {
             String raw = m2.group(1);
             if (isBlank(raw)) continue;
-            if (!seen.add(raw)) continue;
+            if (!isImagePath(raw)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][QUOTED] " + raw); continue; }
+            if (!seen.add(raw)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][QUOTED] " + raw); continue; }
+            cQuoted++; System.out.println("[JS-ASSET][MATCH][QUOTED] " + raw);
             downloadOneAssetFromJs(raw, jsUri, referer, outputDir, currentLocalPath, result, "JS-QUOTED");
         }
-        // 3) 宽松匹配图片后缀 token
+
+        // 3) 宽松 token（限定前缀）
         Matcher m3 = JS_IMG_TOKEN_PATTERN.matcher(js);
         while (m3.find()) {
             String raw = m3.group(1);
             if (isBlank(raw)) continue;
-            if (!seen.add(raw)) continue;
+            if (!isImagePath(raw)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][TOKEN] " + raw); continue; }
+            if (!seen.add(raw)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][TOKEN] " + raw); continue; }
+            cToken++; System.out.println("[JS-ASSET][MATCH][TOKEN] " + raw);
             downloadOneAssetFromJs(raw, jsUri, referer, outputDir, currentLocalPath, result, "JS-TOKEN");
         }
+
+        // 4) 转义双引号
+        Matcher m4 = ESC_DQ_IMG_PATTERN.matcher(js);
+        while (m4.find()) {
+            String raw = m4.group(1);
+            if (isBlank(raw)) continue;
+            if (!isImagePath(raw)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][ESC-DQ] " + raw); continue; }
+            if (!seen.add(raw)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][ESC-DQ] " + raw); continue; }
+            cEscDq++; System.out.println("[JS-ASSET][MATCH][ESC-DQ] " + raw);
+            downloadOneAssetFromJs(raw, jsUri, referer, outputDir, currentLocalPath, result, "JS-ESC-DQ");
+        }
+
+        // 5) 转义单引号
+        Matcher m5 = ESC_SQ_IMG_PATTERN.matcher(js);
+        while (m5.find()) {
+            String raw = m5.group(1);
+            if (isBlank(raw)) continue;
+            if (!isImagePath(raw)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][ESC-SQ] " + raw); continue; }
+            if (!seen.add(raw)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][ESC-SQ] " + raw); continue; }
+            cEscSq++; System.out.println("[JS-ASSET][MATCH][ESC-SQ] " + raw);
+            downloadOneAssetFromJs(raw, jsUri, referer, outputDir, currentLocalPath, result, "JS-ESC-SQ");
+        }
+
+        // 6) HTML 片段属性（非转义）：仅下载图片 src
+        Matcher mAttr1 = ATTR_NONESC_PATTERN.matcher(js);
+        while (mAttr1.find()) {
+            String attr = mAttr1.group(1).toLowerCase();
+            String url = mAttr1.group(3);
+            if (!"src".equals(attr)) continue;
+            if (isBlank(url)) continue;
+            if (!isImagePath(url)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][ATTR] " + url); continue; }
+            if (!seen.add(url)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][ATTR] " + url); continue; }
+            System.out.println("[JS-ASSET][MATCH][ATTR] " + url);
+            downloadOneAssetFromJs(url, jsUri, referer, outputDir, currentLocalPath, result, "JS-ATTR");
+        }
+
+        // 7) HTML 片段属性（转义）：仅下载图片 src
+        Matcher mAttr2 = ATTR_ESC_PATTERN.matcher(js);
+        while (mAttr2.find()) {
+            String attr = mAttr2.group(1).toLowerCase();
+            String url = mAttr2.group(2);
+            if (!"src".equals(attr)) continue;
+            if (isBlank(url)) continue;
+            if (!isImagePath(url)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][ATTR-ESC] " + url); continue; }
+            if (!seen.add(url)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][ATTR-ESC] " + url); continue; }
+            System.out.println("[JS-ASSET][MATCH][ATTR-ESC] " + url);
+            downloadOneAssetFromJs(url, jsUri, referer, outputDir, currentLocalPath, result, "JS-ATTR-ESC");
+        }
+
+        // 8) 直接匹配 <img ... src="..."> 与其转义形式
+        Matcher mImg1 = IMG_TAG_SRC_NONESC.matcher(js);
+        while (mImg1.find()) {
+            String url = mImg1.group(2);
+            if (isBlank(url)) continue;
+            if (!isImagePath(url)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][IMG] " + url); continue; }
+            if (!seen.add(url)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][IMG] " + url); continue; }
+            System.out.println("[JS-ASSET][MATCH][IMG] " + url);
+            downloadOneAssetFromJs(url, jsUri, referer, outputDir, currentLocalPath, result, "JS-IMG");
+        }
+        Matcher mImg2 = IMG_TAG_SRC_ESC.matcher(js);
+        while (mImg2.find()) {
+            String url = mImg2.group(2);
+            if (isBlank(url)) continue;
+            if (!isImagePath(url)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][IMG-ESC] " + url); continue; }
+            if (!seen.add(url)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][IMG-ESC] " + url); continue; }
+            System.out.println("[JS-ASSET][MATCH][IMG-ESC] " + url);
+            downloadOneAssetFromJs(url, jsUri, referer, outputDir, currentLocalPath, result, "JS-IMG-ESC");
+        }
+
+        System.out.println("[JS-ASSET][SUMMARY] cssUrl=" + cCss + ", quoted=" + cQuoted + ", token=" + cToken + ", escDq=" + cEscDq + ", escSq=" + cEscSq + ", dup=" + cDup + ", notImg=" + cSkipNotImg);
     }
 
     private void downloadOneAssetFromJs(String raw,
@@ -845,6 +934,12 @@ public class CrawlService {
             String cleaned = sanitizeJsUrl(raw);
             if (isBlank(cleaned)) return;
             if (!isImagePath(cleaned)) return; // 仅下载图片
+            // 规范化：无协议、无 //、无 /、无 ./ ../ 的裸相对路径，前置 '/'
+            if (!(cleaned.startsWith("http://") || cleaned.startsWith("https://") || cleaned.startsWith("//")
+                    || cleaned.startsWith("/") || cleaned.startsWith("./") || cleaned.startsWith("../"))) {
+                System.out.println("[JS-ASSET][NORMALIZE-ROOT][" + tag + "] " + cleaned + " -> /" + cleaned);
+                cleaned = "/" + cleaned;
+            }
             URI abs = resolveAssetUri(cleaned, base, referer);
             if (!isHttpLike(abs)) return;
             Path assetLocal = mapUriToLocalPath(outputDir, abs, false);
