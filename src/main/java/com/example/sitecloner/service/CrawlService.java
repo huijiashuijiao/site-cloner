@@ -55,6 +55,10 @@ public class CrawlService {
     private static final Pattern JS_WINDOW_OPEN_PATTERN = Pattern.compile("window\\.open\\(\\s*(['\\\"])((?:https?://|/)[^'\\\"\\s<>]+)\\1", Pattern.CASE_INSENSITIVE);
     // 正则：定位 JS 中的 window.open(\"...\"（转义引号）
     private static final Pattern JS_WINDOW_OPEN_ESC_PATTERN = Pattern.compile("window\\.open\\(\\s*\\\\(['\\\"])((?:https?://|/)[^\\\\'\\\"\\s<>]+)\\\\\\\1", Pattern.CASE_INSENSITIVE);
+    // 正则：定位 JS 字符串中的 href="..."、src="..."、action="..."（用于 HTML 片段，非转义）
+    private static final Pattern ATTR_NONESC_PATTERN = Pattern.compile("(href|src|action)\\s*=\\s*(['\\\"])((?:https?://|/)[^'\\\"\\s<>]+)\\2", Pattern.CASE_INSENSITIVE);
+    // 正则：定位 JS 字符串中的 href=\"...\"、src=\"...\"、action=\"...\"（转义引号）
+    private static final Pattern ATTR_ESC_PATTERN = Pattern.compile("(href|src|action)\\s*=\\s*\\\\(?:[\\\"'])((?:https?://|/)[^\\\\'\\\"\\s<>]+)(?:\\\\\\\"|\\\\')", Pattern.CASE_INSENSITIVE);
 
 	public CrawlResult crawl(CrawlRequest request) {
 		Instant start = Instant.now();
@@ -133,6 +137,22 @@ public class CrawlService {
 
 				if (request.isDebugOnlyHome()) {
 					break;
+				}
+
+				// 将 JS 中收集到的页面加入队列（同域且未访问）
+				if (!result.getJsPages().isEmpty()) {
+					for (String pg : new java.util.HashSet<String>(result.getJsPages())) {
+						try {
+							URI next = safeUri(pg);
+							if (next == null) continue;
+							if (request.isSameDomain() && !Objects.equals(next.getHost(), baseHost)) continue;
+							if (!isLikelyHtml(next)) continue;
+							if (visited.contains(next.toString())) continue;
+							queue.add(next);
+							nextLevelCount++;
+						} catch (Exception ignore) {}
+					}
+					result.getJsPages().clear();
 				}
 
 				Elements links = doc.select("a[href]");
@@ -467,8 +487,8 @@ public class CrawlService {
         int escLocMatches = 0, escLocRewrites = 0, escLocSkips = 0;
         int escOpenMatches = 0, escOpenRewrites = 0, escOpenSkips = 0;
 
-        // 处理 HTML 片段中的 href/src 属性
-        Matcher mAttr = HREF_SRC_ATTR_PATTERN.matcher(text);
+        // 处理 HTML 片段中的 href/src/action 属性（非转义）
+        Matcher mAttr = ATTR_NONESC_PATTERN.matcher(text);
         StringBuffer attrBuf = new StringBuffer();
         while (mAttr.find()) {
             String attr = mAttr.group(1);
@@ -480,11 +500,11 @@ public class CrawlService {
                 URI abs = resolveAssetUri(rawUrl, pageUri, pageUri);
                 String pageHost = pageUri.getHost();
                 String targetHost = abs.getHost();
-                String escapedQuote = quote.equals("\"") ? "\\\"" : "\\'";
+                String q = quote;
                 // 记录为候选页面
                 if (isLikelyHtml(abs)) result.addJsPage(abs.toString());
                 if (pageHost != null && targetHost != null && !targetHost.equalsIgnoreCase(pageHost)) {
-                    replacement = attr + "=" + escapedQuote + "/" + escapedQuote;
+                    replacement = attr + "=" + q + "/" + q;
                     attrRewrites++;
                 } else {
                     Path targetLocal = mapUriToLocalPath(outputDir, abs, true);
@@ -495,7 +515,7 @@ public class CrawlService {
                     } else if (rel.equals("index.html")) {
                         rel = "/";
                     }
-                    replacement = attr + "=" + escapedQuote + rel + escapedQuote;
+                    replacement = attr + "=" + q + rel + q;
                     attrRewrites++;
                 }
             } catch (Exception ex) {
@@ -505,6 +525,43 @@ public class CrawlService {
         }
         mAttr.appendTail(attrBuf);
         text = attrBuf.toString();
+
+        // 处理 HTML 片段中的 href/src/action 属性（转义）
+        Matcher mEscAttr = ATTR_ESC_PATTERN.matcher(text);
+        StringBuffer escAttrBuf = new StringBuffer();
+        while (mEscAttr.find()) {
+            String attr = mEscAttr.group(1);
+            String rawUrl = sanitizeJsUrl(mEscAttr.group(2));
+            String replacement = mEscAttr.group();
+            escAttrMatches++;
+            try {
+                URI abs = resolveAssetUri(rawUrl, pageUri, pageUri);
+                String pageHost = pageUri.getHost();
+                String targetHost = abs.getHost();
+                String escapedQuote = "\\\""; // 统一使用转义双引号
+                if (isLikelyHtml(abs)) result.addJsPage(abs.toString());
+                if (pageHost != null && targetHost != null && !targetHost.equalsIgnoreCase(pageHost)) {
+                    replacement = attr + "=" + escapedQuote + "/" + escapedQuote;
+                    escAttrRewrites++;
+                } else {
+                    Path targetLocal = mapUriToLocalPath(outputDir, abs, true);
+                    Files.createDirectories(targetLocal.getParent());
+                    String rel = computeRelativePath(currentLocalPath.getParent(), targetLocal);
+                    if (rel.endsWith("/index.html")) {
+                        rel = rel.substring(0, rel.length() - "/index.html".length()) + "/";
+                    } else if (rel.equals("index.html")) {
+                        rel = "/";
+                    }
+                    replacement = attr + "=" + escapedQuote + rel + escapedQuote;
+                    escAttrRewrites++;
+                }
+            } catch (Exception ex) {
+                escAttrSkips++;
+            }
+            mEscAttr.appendReplacement(escAttrBuf, Matcher.quoteReplacement(replacement));
+        }
+        mEscAttr.appendTail(escAttrBuf);
+        text = escAttrBuf.toString();
 
         // 处理 location.href = '...'
         Matcher mLoc = JS_LOC_HREF_PATTERN.matcher(text);
@@ -580,32 +637,20 @@ public class CrawlService {
         mOpen.appendTail(openBuf);
         text = openBuf.toString();
 
-        // 简化替换（最后兜底）
+        // 简化替换（最后兜底）：仅做 index.html 规范化，避免误将同域 http 替换为 /
         int simpleCount = 0;
         String before;
         before = text;
-        text = text.replaceAll("(?i)href=\"https?://[^\"]+\"", "href=\"/\"");
-        text = text.replaceAll("(?i)href='https?://[^']+'", "href='/'");
-        text = text.replaceAll("(?i)src=\"https?://[^\"]+\"", "src=\"/\"");
-        text = text.replaceAll("(?i)src='https?://[^']+'", "src='/'");
+        // 不再进行 http(s) 外链的无差别替换，改由上面的规则判定域名
         if (!text.equals(before)) simpleCount++;
         before = text;
-        text = text.replaceAll("(?i)href=\\\\\"https?://[^\\\\\"]+\\\\\"", "href=\\\\\"/\\\\\"");
-        text = text.replaceAll("(?i)href=\\\\'https?://[^\\\\']+\\\\'", "href=\\\\'/\\\\'");
-        text = text.replaceAll("(?i)src=\\\\\"https?://[^\\\\\"]+\\\\\"", "src=\\\\\"/\\\\\"");
-        text = text.replaceAll("(?i)src=\\\\'https?://[^\\\\']+\\\\'", "src=\\\\'/\\\\'");
+        // 同上，避免误伤
         if (!text.equals(before)) simpleCount++;
         before = text;
-        text = text.replaceAll("(?i)location\\.href\\s*=\\s*\"https?://[^\"]+\"", "location.href=\"/\"");
-        text = text.replaceAll("(?i)location\\.href\\s*=\\s*'https?://[^']+'", "location.href='/'");
-        text = text.replaceAll("(?i)window\\.open\\(\\s*\"https?://[^\"]+\"", "window.open(\"/\"");
-        text = text.replaceAll("(?i)window\\.open\\(\\s*'https?://[^']+'", "window.open('/'");
+        // 同上，避免误伤（location/window.open 已在规则中处理了域名判断）
         if (!text.equals(before)) simpleCount++;
         before = text;
-        text = text.replaceAll("(?i)location\\.href\\s*=\\s*\\\\\"https?://[^\\\\\"]+\\\\\"", "location.href=\\\\\"/\\\\\"");
-        text = text.replaceAll("(?i)location\\.href\\s*=\\s*\\\\'https?://[^\\\\']+\\\\'", "location.href=\\\\'/\\\\'");
-        text = text.replaceAll("(?i)window\\.open\\(\\s*\\\\\"https?://[^\\\\\"]+\\\\\"", "window.open(\\\\\"/\\\\\"");
-        text = text.replaceAll("(?i)window\\.open\\(\\s*\\\\'https?://[^\\\\']+\\\\'", "window.open(\\\\'/\\\\'");
+        // 同上
         if (!text.equals(before)) simpleCount++;
         before = text;
         text = text.replaceAll("(?i)href=\"(/[^\"]*?)/index\\.html\"", "href=\"$1/\"");
@@ -623,6 +668,9 @@ public class CrawlService {
         // 简单页面 URL 收集：/col/.../index.html 或 /col/.../ 视为页面
         collectJsPages(text, pageUri, result);
 
+        // 额外处理：直接替换同域绝对 URL（非属性场景），如 "http://host/path..."
+        text = rewriteSameDomainQuotedUrls(text, pageUri, outputDir, currentLocalPath);
+
         return text;
     }
 
@@ -630,6 +678,8 @@ public class CrawlService {
     private void collectJsPages(String text, URI pageUri, CrawlResult result) {
         Pattern P1 = Pattern.compile("(['\\\"])(/[^'\\\"\\\\\\s<>]+/index\\.html)\\1", Pattern.CASE_INSENSITIVE);
         Pattern P2 = Pattern.compile("(['\\\"])(/[^'\\\"\\\\\\s<>]+/)\\1", Pattern.CASE_INSENSITIVE);
+        Pattern P3 = Pattern.compile("(['\\\"])(/[^'\\\"\\\\\\s<>]+\\.(?:do|jsp|html))(?:\\?[^'\\\"\\s<>]*)?\\1", Pattern.CASE_INSENSITIVE);
+        Pattern P4 = Pattern.compile("(['\\\"])(/[^'\\\"\\\\\\s<>]+(?:\\?[^'\\\"\\s<>]*)?)\\1", Pattern.CASE_INSENSITIVE);
         Matcher p1 = P1.matcher(text);
         while (p1.find()) {
             try { result.addJsPage(pageUri.resolve(p1.group(2)).toString()); } catch (Exception ignore) {}
@@ -637,6 +687,78 @@ public class CrawlService {
         Matcher p2 = P2.matcher(text);
         while (p2.find()) {
             try { result.addJsPage(pageUri.resolve(p2.group(2)).toString()); } catch (Exception ignore) {}
+        }
+        Matcher p3 = P3.matcher(text);
+        while (p3.find()) {
+            try { result.addJsPage(pageUri.resolve(p3.group(2)).toString()); } catch (Exception ignore) {}
+        }
+        // 广义收集：仅在判断为页面时加入
+        Matcher p4 = P4.matcher(text);
+        while (p4.find()) {
+            try {
+                URI abs = pageUri.resolve(p4.group(2));
+                if (isLikelyHtml(abs)) result.addJsPage(abs.toString());
+            } catch (Exception ignore) {}
+        }
+    }
+
+    // 重写同域绝对 URL（非属性文本），如 "http://host/xxx" 或 \"http://host/xxx\"
+    private String rewriteSameDomainQuotedUrls(String text, URI pageUri, Path outputDir, Path currentLocalPath) {
+        String host = pageUri.getHost();
+        if (host == null) return text;
+        // 非转义："http(s)://host/..."
+        Pattern ABS_NONESC = Pattern.compile("([\\'\"])https?://([^/'\"\\s<>]+)(/[^'\"\\s<>]+)\\1", Pattern.CASE_INSENSITIVE);
+        Matcher m1 = ABS_NONESC.matcher(text);
+        StringBuffer b1 = new StringBuffer();
+        while (m1.find()) {
+            String q = m1.group(1);
+            String urlHost = m1.group(2);
+            String path = m1.group(3);
+            String replacement;
+            if (host.equalsIgnoreCase(urlHost)) {
+                String rel = toRelative(path, outputDir, currentLocalPath, true);
+                replacement = q + rel + q;
+            } else {
+                replacement = q + "/" + q;
+            }
+            m1.appendReplacement(b1, Matcher.quoteReplacement(replacement));
+        }
+        m1.appendTail(b1);
+        text = b1.toString();
+        // 转义：\"http(s)://host/...\"
+        Pattern ABS_ESC = Pattern.compile("\\\\([\\'\"])https?://([^/'\"\\s<>]+)(/[^\\\\'\"\\s<>]+)\\\\\\\1", Pattern.CASE_INSENSITIVE);
+        Matcher m2 = ABS_ESC.matcher(text);
+        StringBuffer b2 = new StringBuffer();
+        while (m2.find()) {
+            String q = m2.group(1);
+            String urlHost = m2.group(2);
+            String path = m2.group(3);
+            String replacement;
+            if (host.equalsIgnoreCase(urlHost)) {
+                String rel = toRelative(path, outputDir, currentLocalPath, true);
+                replacement = "\\\\" + q + rel + "\\\\" + q;
+            } else {
+                replacement = "\\\\" + q + "/" + "\\\\" + q;
+            }
+            m2.appendReplacement(b2, Matcher.quoteReplacement(replacement));
+        }
+        m2.appendTail(b2);
+        return b2.toString();
+    }
+
+    private String toRelative(String pathOrPathQuery, Path outputDir, Path currentLocalPath, boolean isHtml) {
+        try {
+            URI fake = new URI("https://example.com").resolve(pathOrPathQuery);
+            Path local = mapUriToLocalPath(outputDir, fake, isHtml);
+            Files.createDirectories(local.getParent());
+            String rel = computeRelativePath(currentLocalPath.getParent(), local);
+            if (isHtml) {
+                if (rel.endsWith("/index.html")) rel = rel.substring(0, rel.length() - "/index.html".length()) + "/";
+                else if (rel.equals("index.html")) rel = "/";
+            }
+            return rel;
+        } catch (Exception e) {
+            return pathOrPathQuery;
         }
     }
 
