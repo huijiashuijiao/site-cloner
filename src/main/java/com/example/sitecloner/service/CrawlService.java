@@ -2,6 +2,7 @@ package com.example.sitecloner.service;
 
 import com.example.sitecloner.model.CrawlRequest;
 import com.example.sitecloner.model.CrawlResult;
+import com.example.sitecloner.config.StorageProperties;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -30,6 +31,12 @@ import java.util.regex.Pattern;
 @Service
 public class CrawlService {
 
+    private final StorageProperties storageProperties;
+
+    public CrawlService(StorageProperties storageProperties) {
+        this.storageProperties = storageProperties;
+    }
+
     // 正则：匹配 CSS/JS 文本中的 url(...) 模式
     private static final Pattern CSS_URL_PATTERN = Pattern.compile("url\\(\\s*(['\\\"]?)([^\\)\\'\\\"]+)\\1\\s*\\)", Pattern.CASE_INSENSITIVE);
     // 正则：仅匹配 JS 文本中被引号包裹的图片 URL（http(s) 或站内以 / 开头）
@@ -55,11 +62,11 @@ public class CrawlService {
 		try {
 			URI startUri = normalizeUri(request.getStartUrl());
 			String baseHost = startUri.getHost();
-			String timestamp = String.valueOf(System.currentTimeMillis());
 			String outputDirName = (!isBlank(request.getOutputName()))
 					? request.getOutputName()
-					: (sanitizeFileName(baseHost) + "-" + timestamp);
-			Path outputDir = Paths.get("output").resolve(outputDirName);
+					: sanitizeFileName(baseHost);
+			Path baseDir = Paths.get(sanitizePathConfig(storageProperties.getOutputBaseDir()));
+			Path outputDir = baseDir.resolve(outputDirName);
 			Files.createDirectories(outputDir);
 
 			breadthFirstCrawl(startUri, baseHost, request, outputDir, result);
@@ -72,6 +79,16 @@ public class CrawlService {
 		}
 		return result;
 	}
+
+    // 清洗外部配置的路径值（去掉首尾引号，去空白）
+    private static String sanitizePathConfig(String raw) {
+        if (raw == null) return "output";
+        String v = raw.trim();
+        if ((v.startsWith("\"") && v.endsWith("\"")) || (v.startsWith("'") && v.endsWith("'"))) {
+            v = v.substring(1, v.length() - 1).trim();
+        }
+        return v;
+    }
 
 	private void breadthFirstCrawl(URI startUri,
 	                              String baseHost,
@@ -611,8 +628,8 @@ public class CrawlService {
 
     // 收集 JS 文本中潜在页面 URL（用于加入下载）
     private void collectJsPages(String text, URI pageUri, CrawlResult result) {
-        Pattern P1 = Pattern.compile("(['\"])(/[^'\"\\\s<>]+/index\\.html)\\1", Pattern.CASE_INSENSITIVE);
-        Pattern P2 = Pattern.compile("(['\"])(/[^'\"\\\s<>]+/)\\1", Pattern.CASE_INSENSITIVE);
+        Pattern P1 = Pattern.compile("(['\\\"])(/[^'\\\"\\\\\\s<>]+/index\\.html)\\1", Pattern.CASE_INSENSITIVE);
+        Pattern P2 = Pattern.compile("(['\\\"])(/[^'\\\"\\\\\\s<>]+/)\\1", Pattern.CASE_INSENSITIVE);
         Matcher p1 = P1.matcher(text);
         while (p1.find()) {
             try { result.addJsPage(pageUri.resolve(p1.group(2)).toString()); } catch (Exception ignore) {}
