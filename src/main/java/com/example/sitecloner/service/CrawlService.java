@@ -580,15 +580,10 @@ public class CrawlService {
                 if (pageHost != null && targetHost != null && !targetHost.equalsIgnoreCase(pageHost)) {
                     replacement = attr + "=" + q + "/" + q;
                 } else {
-                    Path targetLocal = mapUriToLocalPath(outputDir, abs, true);
-                    Files.createDirectories(targetLocal.getParent());
-                    String rel = computeRelativePath(currentLocalPath.getParent(), targetLocal);
-                    if (rel.endsWith("/index.html")) {
-                        rel = rel.substring(0, rel.length() - "/index.html".length()) + "/";
-                    } else if (rel.equals("index.html")) {
-                        rel = "/";
-                    }
-                    replacement = attr + "=" + q + rel + q;
+                    boolean isHtml = isLikelyHtml(abs);
+                    String rootRel = toRootRelativeFromLocal(outputDir, abs, isHtml);
+                    // 去除 index.html 规范化（toRootRelativeFromLocal 已处理）
+                    replacement = attr + "=" + q + rootRel + q;
                 }
             } catch (Exception ex) {
                 // skip
@@ -614,15 +609,9 @@ public class CrawlService {
                 if (pageHost != null && targetHost != null && !targetHost.equalsIgnoreCase(pageHost)) {
                     replacement = attr + "=" + escapedQuote + "/" + escapedQuote;
                 } else {
-                    Path targetLocal = mapUriToLocalPath(outputDir, abs, true);
-                    Files.createDirectories(targetLocal.getParent());
-                    String rel = computeRelativePath(currentLocalPath.getParent(), targetLocal);
-                    if (rel.endsWith("/index.html")) {
-                        rel = rel.substring(0, rel.length() - "/index.html".length()) + "/";
-                    } else if (rel.equals("index.html")) {
-                        rel = "/";
-                    }
-                    replacement = attr + "=" + escapedQuote + rel + escapedQuote;
+                    boolean isHtml = isLikelyHtml(abs);
+                    String rootRel = toRootRelativeFromLocal(outputDir, abs, isHtml);
+                    replacement = attr + "=" + escapedQuote + rootRel + escapedQuote;
                 }
             } catch (Exception ex) {
                 // skip
@@ -648,15 +637,9 @@ public class CrawlService {
                 if (pageHost != null && targetHost != null && !targetHost.equalsIgnoreCase(pageHost)) {
                     replacement = "location.href=" + escapedQuote + "/" + escapedQuote;
                 } else {
-                    Path targetLocal = mapUriToLocalPath(outputDir, abs, true);
-                    Files.createDirectories(targetLocal.getParent());
-                    String rel = computeRelativePath(currentLocalPath.getParent(), targetLocal);
-                    if (rel.endsWith("/index.html")) {
-                        rel = rel.substring(0, rel.length() - "/index.html".length()) + "/";
-                    } else if (rel.equals("index.html")) {
-                        rel = "/";
-                    }
-                    replacement = "location.href=" + escapedQuote + rel + escapedQuote;
+                    boolean isHtml = isLikelyHtml(abs);
+                    String rootRel = toRootRelativeFromLocal(outputDir, abs, isHtml);
+                    replacement = "location.href=" + escapedQuote + rootRel + escapedQuote;
                 }
             } catch (Exception ex) {
                 // skip
@@ -682,15 +665,9 @@ public class CrawlService {
                 if (pageHost != null && targetHost != null && !targetHost.equalsIgnoreCase(pageHost)) {
                     replacement = "window.open(" + escapedQuote + "/" + escapedQuote;
                 } else {
-                    Path targetLocal = mapUriToLocalPath(outputDir, abs, true);
-                    Files.createDirectories(targetLocal.getParent());
-                    String rel = computeRelativePath(currentLocalPath.getParent(), targetLocal);
-                    if (rel.endsWith("/index.html")) {
-                        rel = rel.substring(0, rel.length() - "/index.html".length()) + "/";
-                    } else if (rel.equals("index.html")) {
-                        rel = "/";
-                    }
-                    replacement = "window.open(" + escapedQuote + rel + escapedQuote;
+                    boolean isHtml = isLikelyHtml(abs);
+                    String rootRel = toRootRelativeFromLocal(outputDir, abs, isHtml);
+                    replacement = "window.open(" + escapedQuote + rootRel + escapedQuote;
                 }
             } catch (Exception ex) {
                 // skip
@@ -761,8 +738,13 @@ public class CrawlService {
             String path = m1.group(3);
             String replacement;
             if (host.equalsIgnoreCase(urlHost)) {
-                String rel = toRelative(path, outputDir, currentLocalPath, true);
-                replacement = q + rel + q;
+                try {
+                    URI abs = new URI(pageUri.getScheme() == null ? "https" : pageUri.getScheme(), null, urlHost, -1, path, null, null);
+                    String rel = toRootRelativeFromLocal(outputDir, abs, isLikelyHtml(abs));
+                    replacement = q + rel + q;
+                } catch (Exception e) {
+                    replacement = q + "/" + q;
+                }
             } else {
                 replacement = q + "/" + q;
             }
@@ -771,7 +753,7 @@ public class CrawlService {
         m1.appendTail(b1);
         text = b1.toString();
         // 转义：\"http(s)://host/...\"
-        Pattern ABS_ESC = Pattern.compile("\\\\([\\'\"])https?://([^/'\"\\s<>]+)(/[^\\\\'\"\\s<>]+)\\\\\\\1", Pattern.CASE_INSENSITIVE);
+        Pattern ABS_ESC = Pattern.compile("\\\\([\\'\"])https?://([^/'\"\\s<>]+)(/[^\\\\'\"\\s<>]+)\\\\\\1", Pattern.CASE_INSENSITIVE);
         Matcher m2 = ABS_ESC.matcher(text);
         StringBuffer b2 = new StringBuffer();
         while (m2.find()) {
@@ -780,10 +762,15 @@ public class CrawlService {
             String path = m2.group(3);
             String replacement;
             if (host.equalsIgnoreCase(urlHost)) {
-                String rel = toRelative(path, outputDir, currentLocalPath, true);
-                replacement = "\\\\" + q + rel + "\\\\" + q;
+                try {
+                    URI abs = new URI(pageUri.getScheme() == null ? "https" : pageUri.getScheme(), null, urlHost, -1, path, null, null);
+                    String rel = toRootRelativeFromLocal(outputDir, abs, isLikelyHtml(abs));
+                    replacement = "\\" + q + rel + "\\" + q;
+                } catch (Exception e) {
+                    replacement = "\\" + q + "/" + "\\" + q;
+                }
             } else {
-                replacement = "\\\\" + q + "/" + "\\\\" + q;
+                replacement = "\\" + q + "/" + "\\" + q;
             }
             m2.appendReplacement(b2, Matcher.quoteReplacement(replacement));
         }
@@ -805,6 +792,22 @@ public class CrawlService {
         } catch (Exception e) {
             return pathOrPathQuery;
         }
+    }
+
+    // 计算基于站点根（outputDir/<host>）的根相对路径，避免 JS 中出现 ../ 层级引用
+    private String toRootRelativeFromLocal(Path outputDir, URI abs, boolean isHtml) {
+        String host = abs.getHost() == null ? "unknown-host" : abs.getHost();
+        Path targetLocal = mapUriToLocalPath(outputDir, abs, isHtml);
+        Path siteRoot = outputDir.resolve(host);
+        String rel = computeRelativePath(siteRoot, targetLocal);
+        if (isHtml) {
+            if (rel.endsWith("/index.html")) rel = rel.substring(0, rel.length() - "/index.html".length()) + "/";
+            else if (rel.equals("index.html")) rel = "/";
+            else if (!rel.contains(".")) {
+                if (!rel.endsWith("/")) rel = rel + "/";
+            }
+        }
+        return "/" + rel;
     }
 
     private void processJsForAssets(byte[] jsBytes,
