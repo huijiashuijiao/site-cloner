@@ -21,6 +21,12 @@ public class CrawlResult {
 	// 已保存的页面（绝对 URL），用于生成 sitemap.xml
 	private final Set<String> pages = new TreeSet<>();
 
+	// 本次任务内已下载过的资产（绝对 URL 字符串），用于去重
+	private final Set<String> downloadedAssets = new HashSet<>();
+
+	// 已对其执行过 JS 资产扫描的 JS 资源（绝对 URI 字符串）
+	private final Set<String> processedJsUris = new HashSet<>();
+
 	public String getOutputDirectory() {
 		return outputDirectory;
 	}
@@ -79,6 +85,20 @@ public class CrawlResult {
 		if (url != null && !url.isEmpty()) {
 			pages.add(url);
 		}
+	}
+
+	public boolean hasAsset(String absUrl) {
+		return absUrl != null && downloadedAssets.contains(absUrl);
+	}
+
+	public boolean tryMarkAsset(String absUrl) {
+		if (absUrl == null || absUrl.isEmpty()) return false;
+		return downloadedAssets.add(absUrl);
+	}
+
+	public boolean tryMarkJsProcessed(String jsUri) {
+		if (jsUri == null || jsUri.isEmpty()) return false;
+		return processedJsUris.add(jsUri);
 	}
 }
 

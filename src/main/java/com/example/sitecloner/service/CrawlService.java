@@ -61,20 +61,20 @@ public class CrawlService {
     // 正则：匹配 JS 字符串中的转义形式 <img ... src=\"...png\">
     private static final Pattern IMG_TAG_SRC_ESC = Pattern.compile("<img[^>]+src\\s*=\\s*\\\\(['\\\"])([^\\\\'\\\"\\s<>]+\\.(?:png|jpe?g|gif|webp|svg|ico))(?:\\?[^\\\\'\\\"<>]*)?\\\\\\1", Pattern.CASE_INSENSITIVE);
 
-	public CrawlResult crawl(CrawlRequest request) {
-		Instant start = Instant.now();
-		CrawlResult result = new CrawlResult();
-		try {
-			URI startUri = normalizeUri(request.getStartUrl());
-			String baseHost = startUri.getHost();
-			String outputDirName = (!isBlank(request.getOutputName()))
-					? request.getOutputName()
-					: sanitizeFileName(baseHost);
-			Path baseDir = Paths.get(sanitizePathConfig(storageProperties.getOutputBaseDir()));
-			Path outputDir = baseDir.resolve(outputDirName);
-			Files.createDirectories(outputDir);
+    public CrawlResult crawl(CrawlRequest request) {
+        Instant start = Instant.now();
+        CrawlResult result = new CrawlResult();
+        try {
+            URI startUri = normalizeUri(request.getStartUrl());
+            String baseHost = startUri.getHost();
+            String outputDirName = (!isBlank(request.getOutputName()))
+                    ? request.getOutputName()
+                    : sanitizeFileName(baseHost);
+            Path baseDir = Paths.get(sanitizePathConfig(storageProperties.getOutputBaseDir()));
+            Path outputDir = baseDir.resolve(outputDirName);
+            Files.createDirectories(outputDir);
 
-			breadthFirstCrawl(startUri, baseHost, request, outputDir, result);
+            breadthFirstCrawl(startUri, baseHost, request, outputDir, result);
 
             // 生成 sitemap.xml（放在站点根：outputDir/<host>/sitemap.xml）
             try {
@@ -83,14 +83,14 @@ public class CrawlService {
                 result.addError("生成 sitemap.xml 失败: " + e.getMessage());
             }
 
-			result.setOutputDirectory(outputDir.toAbsolutePath().toString());
-		} catch (Exception e) {
-			result.addError(e.getMessage());
-		} finally {
-			result.setElapsed(Duration.between(start, Instant.now()));
-		}
-		return result;
-	}
+            result.setOutputDirectory(outputDir.toAbsolutePath().toString());
+        } catch (Exception e) {
+            result.addError(e.getMessage());
+        } finally {
+            result.setElapsed(Duration.between(start, Instant.now()));
+        }
+        return result;
+    }
 
     // 清洗外部配置的路径值（去掉首尾引号，去空白）
     private static String sanitizePathConfig(String raw) {
@@ -102,112 +102,117 @@ public class CrawlService {
         return v;
     }
 
-	private void breadthFirstCrawl(URI startUri,
-	                              String baseHost,
-	                              CrawlRequest request,
-	                              Path outputDir,
-	                              CrawlResult result) throws IOException {
-		ArrayDeque<URI> queue = new ArrayDeque<>();
-		Set<String> visited = new HashSet<>();
-		queue.add(startUri);
+    private void breadthFirstCrawl(URI startUri,
+                                   String baseHost,
+                                   CrawlRequest request,
+                                   Path outputDir,
+                                   CrawlResult result) throws IOException {
+        ArrayDeque<URI> queue = new ArrayDeque<>();
+        Set<String> visited = new HashSet<>();
+        queue.add(startUri);
 
-		int pages = 0;
-		int depth = 0;
-		int currentLevelCount = 1;
-		int nextLevelCount = 0;
+        int pages = 0;
+        int depth = 0;
+        int currentLevelCount = 1;
+        int nextLevelCount = 0;
+        System.out.println("[BFS][START] maxDepth=" + request.getMaxDepth() + ", maxPages=" + request.getMaxPages());
 
-		while (!queue.isEmpty() && pages < request.getMaxPages() && depth < request.getMaxDepth()) {
-			URI uri = queue.poll();
-			currentLevelCount--;
-			String key = uri.toString();
-			if (visited.contains(key)) {
-				if (currentLevelCount == 0) {
-					depth++;
-					currentLevelCount = nextLevelCount;
-					nextLevelCount = 0;
-				}
-				continue;
-			}
-			visited.add(key);
+        while (!queue.isEmpty() && pages < request.getMaxPages() && depth <= request.getMaxDepth()) {
+            URI uri = queue.poll();
+            currentLevelCount--;
+            String key = uri.toString();
+            if (visited.contains(key)) {
+                if (currentLevelCount == 0) {
+                    depth++;
+                    currentLevelCount = nextLevelCount;
+                    nextLevelCount = 0;
+                }
+                continue;
+            }
+            visited.add(key);
+            System.out.println("[BFS][VISIT] depth=" + depth + " -> " + uri);
 
-			try {
-				org.jsoup.Connection.Response res = Jsoup.connect(uri.toString())
-						.userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
-						.timeout(20000)
-						.ignoreHttpErrors(true)
-						.execute();
-				int status = res.statusCode();
-				if (status == 404) {
-					System.out.println("[PAGE][SKIP-404] " + uri);
-				} else {
-					Document doc = res.parse();
-					Path localHtmlPath = mapUriToLocalPath(outputDir, uri, true);
-					Files.createDirectories(localHtmlPath.getParent());
-					rewriteAndSaveHtml(doc, uri, outputDir, localHtmlPath, request, result);
-					result.addPage(uri.toString());
-					pages++;
-					result.setPagesDownloaded(pages);
+            try {
+                org.jsoup.Connection.Response res = Jsoup.connect(uri.toString())
+                        .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+                        .timeout(20000)
+                        .ignoreHttpErrors(true)
+                        .execute();
+                int status = res.statusCode();
+                if (status == 404) {
+                    System.out.println("[PAGE][SKIP-404] " + uri);
+                } else {
+                    Document doc = res.parse();
+                    Path localHtmlPath = mapUriToLocalPath(outputDir, uri, true);
+                    Files.createDirectories(localHtmlPath.getParent());
+                    rewriteAndSaveHtml(doc, uri, outputDir, localHtmlPath, request, result);
+                    result.addPage(uri.toString());
+                    pages++;
+                    result.setPagesDownloaded(pages);
 
-					if (request.isDebugOnlyHome()) {
-						break;
-					}
+                    if (request.isDebugOnlyHome()) {
+                        break;
+                    }
 
-					// 从页面 a[href] 继续发现链接
-					Elements links = doc.select("a[href]");
-					for (Element a : links) {
-						String href = a.attr("abs:href");
-						if (href == null || href.trim().isEmpty()) continue;
-						URI next = safeUri(href);
-						if (next == null) continue;
-						if (request.isSameDomain() && !Objects.equals(next.getHost(), baseHost)) continue;
-						if (!isLikelyHtml(next)) continue;
-						if (visited.contains(next.toString())) continue;
-						queue.add(next);
-						nextLevelCount++;
-					}
+                    // 从页面 a[href] 继续发现链接
+                    Elements links = doc.select("a[href]");
+                    for (Element a : links) {
+                        String href = a.attr("abs:href");
+                        if (href == null || href.trim().isEmpty()) continue;
+                        URI next = safeUri(href);
+                        if (next == null) continue;
+                        if (request.isSameDomain() && !Objects.equals(next.getHost(), baseHost)) { System.out.println("[BFS][SKIP-XDOMAIN] " + next); continue; }
+                        if (!isLikelyHtml(next)) { System.out.println("[BFS][SKIP-NONHTML] " + next); continue; }
+                        if (visited.contains(next.toString())) { System.out.println("[BFS][SKIP-VISITED] " + next); continue; }
+                        queue.add(next);
+                        nextLevelCount++;
+                        System.out.println("[BFS][ENQUEUE] depthNext=" + (depth+1) + " -> " + next);
+                    }
 
-					// 将 JS 中收集到的页面加入队列（同域且未访问）
-					if (!result.getJsPages().isEmpty()) {
-						for (String pg : new java.util.HashSet<String>(result.getJsPages())) {
-							try {
-								URI next = safeUri(pg);
-								if (next == null) continue;
-								if (request.isSameDomain() && !Objects.equals(next.getHost(), baseHost)) continue;
-								if (!isLikelyHtml(next)) continue;
-								if (visited.contains(next.toString())) continue;
-								queue.add(next);
-								nextLevelCount++;
-							} catch (Exception ignore) {}
-						}
-						result.getJsPages().clear();
-					}
-				}
+                    // 将 JS 中收集到的页面加入队列（同域且未访问）
+                    if (!result.getJsPages().isEmpty()) {
+                        for (String pg : new java.util.HashSet<String>(result.getJsPages())) {
+                            try {
+                                URI next = safeUri(pg);
+                                if (next == null) continue;
+                                if (request.isSameDomain() && !Objects.equals(next.getHost(), baseHost)) continue;
+                                if (!isLikelyHtml(next)) continue;
+                                if (visited.contains(next.toString())) continue;
+                                queue.add(next);
+                                nextLevelCount++;
+                            } catch (Exception ignore) {}
+                        }
+                        result.getJsPages().clear();
+                    }
+                }
 
-			} catch (Exception ex) {
-				result.addError(uri + " -> " + ex.getMessage());
-			}
+            } catch (Exception ex) {
+                result.addError(uri + " -> " + ex.getMessage());
+            }
 
-			if (currentLevelCount == 0) {
-				depth++;
-				currentLevelCount = nextLevelCount;
-				nextLevelCount = 0;
-			}
-		}
-	}
+            if (currentLevelCount == 0) {
+                depth++;
+                currentLevelCount = nextLevelCount;
+                nextLevelCount = 0;
+                System.out.println("[BFS][LEVEL-END] depth=" + depth + ", queueSize=" + queue.size());
+            }
+        }
+        System.out.println("[BFS][END] pages=" + pages + ", finalDepth=" + depth + ", remainingQueue=" + queue.size());
+    }
 
     private void rewriteAndSaveHtml(Document doc,
-                                   URI pageUri,
-                                   Path outputDir,
-                                   Path localHtmlPath,
-                                   CrawlRequest request,
-                                   CrawlResult result) throws IOException {
+                                    URI pageUri,
+                                    Path outputDir,
+                                    Path localHtmlPath,
+                                    CrawlRequest request,
+                                    CrawlResult result) throws IOException {
         // 处理常见资源: img[src], script[src], link[href]
         for (Element el : doc.select("img[src], script[src], link[href]")) {
-			String attr = el.hasAttr("src") ? "src" : "href";
-			String abs = el.attr("abs:" + attr);
-			if (abs == null || abs.trim().isEmpty()) continue;
-			URI resUri = safeUri(abs);
-			if (resUri == null) continue;
+            String attr = el.hasAttr("src") ? "src" : "href";
+            String abs = el.attr("abs:" + attr);
+            if (abs == null || abs.trim().isEmpty()) continue;
+            URI resUri = safeUri(abs);
+            if (resUri == null) continue;
             try {
                 // 如果是 CSS 样式表，下载文本并解析其中的 url(...)
                 boolean isStylesheet = "link".equalsIgnoreCase(el.tagName()) &&
@@ -248,9 +253,14 @@ public class CrawlService {
                             result.addError("JS 资源提取失败: " + resUri + " -> " + ex.getMessage());
                         }
                     } else {
-                        byte[] bytes = fetchBinary(resUri, pageUri);
-                        Files.write(resLocal, bytes);
-                        result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                        String key = resUri.toString();
+                        if (!result.tryMarkAsset(key)) {
+                            System.out.println("[ASSET][SKIP-DUP] " + key);
+                        } else {
+                            byte[] bytes = fetchBinary(resUri, pageUri);
+                            Files.write(resLocal, bytes);
+                            result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                        }
                     }
                 }
 
@@ -259,10 +269,47 @@ public class CrawlService {
             } catch (Exception ex) {
                 result.addError("资源下载失败: " + resUri + " -> " + ex.getMessage());
             }
-		}
+        }
 
         // 处理内联样式与 <style> 块中的背景图片（并应用替换）
         processInlineStyles(doc, pageUri, outputDir, localHtmlPath, result, request);
+
+        // 处理页面内联 <script>（无 src）：重写其中的链接并收集页面、提取图片
+        try {
+            for (Element sc : doc.select("script:not([src])")) {
+                String js = sc.data();
+                if (isBlank(js)) js = sc.html();
+                if (isBlank(js)) continue;
+                String rewrittenJs = rewriteJsLinksInContent(js, pageUri, outputDir, localHtmlPath, result);
+                // 替换回页面（使用 text 设置 script 内容）
+                sc.text(rewrittenJs);
+                try {
+                    processJsForAssets(rewrittenJs.getBytes(StandardCharsets.UTF_8), pageUri, pageUri, outputDir, localHtmlPath, result);
+                } catch (Exception ignore) {}
+            }
+        } catch (Exception ignore) {}
+
+        // 处理常见行内事件/URL 属性中的 JS 片段（点击跳转等），既收集页面也回写重写后的内容
+        try {
+            String[] jsAttrs = new String[]{"onclick", "onmouseover", "onfocus", "onsubmit", "onload", "onchange"};
+            String[] urlLikeAttrs = new String[]{"data-href", "data-url", "data-link"};
+            for (Element el : doc.getAllElements()) {
+                for (String a : jsAttrs) {
+                    if (!el.hasAttr(a)) continue;
+                    String v = el.attr(a);
+                    if (isBlank(v)) continue;
+                    String rewritten = rewriteJsLinksInContent(v, pageUri, outputDir, localHtmlPath, result);
+                    if (!isBlank(rewritten) && !rewritten.equals(v)) el.attr(a, rewritten);
+                }
+                for (String a : urlLikeAttrs) {
+                    if (!el.hasAttr(a)) continue;
+                    String v = el.attr(a);
+                    if (isBlank(v)) continue;
+                    String rewritten = rewriteJsLinksInContent(v, pageUri, outputDir, localHtmlPath, result);
+                    if (!isBlank(rewritten) && !rewritten.equals(v)) el.attr(a, rewritten);
+                }
+            }
+        } catch (Exception ignore) {}
 
         // 移除 SEO 相关标签（更稳健的白/黑名单+大小写兼容）：
         // - 策略改为：仅保留白名单 meta（大小写不敏感、支持部分前缀），其它一律移除；不移除任何 <link>
@@ -316,9 +363,14 @@ public class CrawlService {
                     URI abs = pageUri.resolve(val);
                     Path assetLocal = mapUriToLocalPath(outputDir, abs, false);
                     Files.createDirectories(assetLocal.getParent());
-                    byte[] bytes = fetchBinary(abs, pageUri);
-                    Files.write(assetLocal, bytes);
-                    result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                    String key = abs.toString();
+                    if (!result.tryMarkAsset(key)) {
+                        System.out.println("[ASSET][SKIP-DUP][LAZY] " + key);
+                    } else {
+                        byte[] bytes = fetchBinary(abs, pageUri);
+                        Files.write(assetLocal, bytes);
+                        result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                    }
                     String rel = computeRelativePath(localHtmlPath.getParent(), assetLocal);
                     img.attr(la, rel);
                     if (isBlank(img.attr("src"))) img.attr("src", rel);
@@ -365,9 +417,14 @@ public class CrawlService {
                     // 非HTML: 当作静态资产下载并重写为相对路径
                     Path assetLocal = mapUriToLocalPath(outputDir, target, false);
                     Files.createDirectories(assetLocal.getParent());
-                    byte[] bytes = fetchBinary(target, pageUri);
-                    Files.write(assetLocal, bytes);
-                    result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                    String key = target.toString();
+                    if (!result.tryMarkAsset(key)) {
+                        System.out.println("[ASSET][SKIP-DUP][A] " + key);
+                    } else {
+                        byte[] bytes = fetchBinary(target, pageUri);
+                        Files.write(assetLocal, bytes);
+                        result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                    }
                     String rel = computeRelativePath(localHtmlPath.getParent(), assetLocal);
                     a.attr("href", rel);
                 }
@@ -384,9 +441,14 @@ public class CrawlService {
                     URI abs = pageUri.resolve(src);
                     Path assetLocal = mapUriToLocalPath(outputDir, abs, false);
                     Files.createDirectories(assetLocal.getParent());
-                    byte[] bytes = fetchBinary(abs, pageUri);
-                    Files.write(assetLocal, bytes);
-                    result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                    String key = abs.toString();
+                    if (!result.tryMarkAsset(key)) {
+                        System.out.println("[ASSET][SKIP-DUP][SOURCE] " + key);
+                    } else {
+                        byte[] bytes = fetchBinary(abs, pageUri);
+                        Files.write(assetLocal, bytes);
+                        result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                    }
                     String rel = computeRelativePath(localHtmlPath.getParent(), assetLocal);
                     source.attr("src", rel);
                 } catch (Exception ex) {
@@ -408,9 +470,14 @@ public class CrawlService {
                 URI abs = pageUri.resolve(href);
                 Path assetLocal = mapUriToLocalPath(outputDir, abs, false);
                 Files.createDirectories(assetLocal.getParent());
-                byte[] bytes = fetchBinary(abs, pageUri);
-                Files.write(assetLocal, bytes);
-                result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                String key = abs.toString();
+                if (!result.tryMarkAsset(key)) {
+                    System.out.println("[ASSET][SKIP-DUP][PRELOAD] " + key);
+                } else {
+                    byte[] bytes = fetchBinary(abs, pageUri);
+                    Files.write(assetLocal, bytes);
+                    result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                }
                 String rel = computeRelativePath(localHtmlPath.getParent(), assetLocal);
                 link.attr("href", rel);
             } catch (Exception ex) {
@@ -438,7 +505,27 @@ public class CrawlService {
             }
         }
         if (doc.body() != null && !isBlank(newTitle)) {
-            doc.body().insertChildren(0, org.jsoup.parser.Parser.parseFragment("<h1>" + org.jsoup.nodes.Entities.escape(newTitle) + "</h1>", doc.body(), doc.baseUri()));
+            String esc = org.jsoup.nodes.Entities.escape(newTitle);
+            Element target = null;
+            // 优先 header，其次第一个容器（div/main/section）
+            Element header = doc.selectFirst("body > header, body header");
+            if (header != null) target = header;
+            if (target == null) target = doc.selectFirst("body > div, body > main, body > section");
+            if (target == null && !doc.body().children().isEmpty()) target = doc.body().child(0);
+            if (target == null) target = doc.body();
+
+            Element h1 = doc.createElement("h1");
+            h1.text(newTitle);
+            h1.attr("class", "sitecloner-title");
+            h1.attr("style", "margin:0;font-size:inherit;font-weight:inherit;");
+
+            // 若存在栅格列，插入到第一列中，避免独占一行
+            Element firstCol = target.selectFirst(".row > [class*=col-], [class*=col-sm-], [class*=col-md-], [class*=col-lg-], [class*=col-xl-]");
+            if (firstCol != null) {
+                firstCol.insertChildren(0, h1);
+            } else {
+                target.insertChildren(0, h1);
+            }
         }
 
         // 在 body 尾部追加网站地图链接（去重）
@@ -454,7 +541,7 @@ public class CrawlService {
         htmlOut = applyReplacements(htmlOut, request);
         byte[] htmlBytes = htmlOut.getBytes(StandardCharsets.UTF_8);
         Files.write(localHtmlPath, htmlBytes);
-	}
+    }
 
     private void processInlineStyles(Document doc,
                                      URI pageUri,
@@ -511,9 +598,14 @@ public class CrawlService {
             try {
                 Path assetLocal = mapUriToLocalPath(outputDir, abs, false);
                 Files.createDirectories(assetLocal.getParent());
-                byte[] bytes = fetchBinary(abs, baseUri);
-                Files.write(assetLocal, bytes);
-                result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                String key = abs.toString();
+                if (!result.tryMarkAsset(key)) {
+                    System.out.println("[ASSET][SKIP-DUP][CSS-URL] " + key);
+                } else {
+                    byte[] bytes = fetchBinary(abs, baseUri);
+                    Files.write(assetLocal, bytes);
+                    result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                }
                 String rel = computeRelativePath(currentLocalPath.getParent(), assetLocal);
                 String replacement = "url('" + rel.replace("$", "\\$") + "')";
                 m.appendReplacement(sb, Matcher.quoteReplacement(replacement));
@@ -860,6 +952,13 @@ public class CrawlService {
                                     Path outputDir,
                                     Path currentLocalPath,
                                     CrawlResult result) throws IOException {
+        if (jsUri != null) {
+            String key = jsUri.toString();
+            if (!result.tryMarkJsProcessed(key)) {
+                System.out.println("[JS-ASSET][SKIP-JS-PROCESSED] " + key);
+                return;
+            }
+        }
         String js = new String(jsBytes, StandardCharsets.UTF_8);
         java.util.Set<String> seen = new java.util.HashSet<String>();
 
@@ -989,6 +1088,11 @@ public class CrawlService {
             }
             URI abs = resolveAssetUri(cleaned, base, referer);
             if (!isHttpLike(abs)) return;
+            String key = abs.toString();
+            if (!result.tryMarkAsset(key)) {
+                System.out.println("[ASSET][SKIP-DUP][" + tag + "] " + key);
+                return;
+            }
             Path assetLocal = mapUriToLocalPath(outputDir, abs, false);
             Files.createDirectories(assetLocal.getParent());
             byte[] bytes = fetchBinary(abs, referer);
@@ -1073,9 +1177,14 @@ public class CrawlService {
                 URI abs = baseUri.resolve(urlPart);
                 Path assetLocal = mapUriToLocalPath(outputDir, abs, false);
                 Files.createDirectories(assetLocal.getParent());
-                byte[] bytes = fetchBinary(abs, baseUri);
-                Files.write(assetLocal, bytes);
-                result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                String key = abs.toString();
+                if (!result.tryMarkAsset(key)) {
+                    System.out.println("[ASSET][SKIP-DUP][SRCSET] " + key);
+                } else {
+                    byte[] bytes = fetchBinary(abs, baseUri);
+                    Files.write(assetLocal, bytes);
+                    result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                }
                 String rel = computeRelativePath(currentLocalPath.getParent(), assetLocal);
                 if (rebuilt.length() > 0) rebuilt.append(", ");
                 rebuilt.append(rel);
@@ -1087,21 +1196,21 @@ public class CrawlService {
         return rebuilt.toString();
     }
 
-	private static URI normalizeUri(String url) throws URISyntaxException {
-		URI uri = new URI(url);
-		if (uri.getScheme() == null) {
-			uri = new URI("https://" + url);
-		}
-		return uri.normalize();
-	}
+    private static URI normalizeUri(String url) throws URISyntaxException {
+        URI uri = new URI(url);
+        if (uri.getScheme() == null) {
+            uri = new URI("https://" + url);
+        }
+        return uri.normalize();
+    }
 
-	private static URI safeUri(String url) {
-		try {
-			return normalizeUri(url);
-		} catch (Exception e) {
-			return null;
-		}
-	}
+    private static URI safeUri(String url) {
+        try {
+            return normalizeUri(url);
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
     private static String sanitizeFileName(String name) {
         try {
@@ -1158,7 +1267,7 @@ public class CrawlService {
             if (lastIndex >= 0 && parts[lastIndex] != null && !parts[lastIndex].trim().isEmpty()) {
                 String last = parts[lastIndex];
                 int dot = last.lastIndexOf('.')
-;                if (dot > 0) {
+                        ;                if (dot > 0) {
                     parts[lastIndex] = last.substring(0, dot) + suffix + last.substring(dot);
                 } else {
                     parts[lastIndex] = last + suffix + (isHtml ? ".html" : "");
@@ -1177,11 +1286,11 @@ public class CrawlService {
         return outputRoot.resolve(path);
     }
 
-	private static String computeRelativePath(Path fromDir, Path target) {
-		Path rel = fromDir.relativize(target);
-		String s = rel.toString();
-		return s.replace('\\', '/');
-	}
+    private static String computeRelativePath(Path fromDir, Path target) {
+        Path rel = fromDir.relativize(target);
+        String s = rel.toString();
+        return s.replace('\\', '/');
+    }
 
     private static boolean isBlank(String s) {
         return s == null || s.trim().isEmpty();
