@@ -131,51 +131,58 @@ public class CrawlService {
 			visited.add(key);
 
 			try {
-				Document doc = Jsoup.connect(uri.toString())
+				org.jsoup.Connection.Response res = Jsoup.connect(uri.toString())
 						.userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 						.timeout(20000)
 						.ignoreHttpErrors(true)
-						.get();
+						.execute();
+				int status = res.statusCode();
+				if (status == 404) {
+					System.out.println("[PAGE][SKIP-404] " + uri);
+				} else {
+					Document doc = res.parse();
+					Path localHtmlPath = mapUriToLocalPath(outputDir, uri, true);
+					Files.createDirectories(localHtmlPath.getParent());
+					rewriteAndSaveHtml(doc, uri, outputDir, localHtmlPath, request, result);
+					result.addPage(uri.toString());
+					pages++;
+					result.setPagesDownloaded(pages);
 
-				Path localHtmlPath = mapUriToLocalPath(outputDir, uri, true);
-				Files.createDirectories(localHtmlPath.getParent());
-                rewriteAndSaveHtml(doc, uri, outputDir, localHtmlPath, request, result);
-                result.addPage(uri.toString());
-				pages++;
-				result.setPagesDownloaded(pages);
-
-				if (request.isDebugOnlyHome()) {
-					break;
-				}
-
-				// 将 JS 中收集到的页面加入队列（同域且未访问）
-				if (!result.getJsPages().isEmpty()) {
-					for (String pg : new java.util.HashSet<String>(result.getJsPages())) {
-						try {
-							URI next = safeUri(pg);
-							if (next == null) continue;
-							if (request.isSameDomain() && !Objects.equals(next.getHost(), baseHost)) continue;
-							if (!isLikelyHtml(next)) continue;
-							if (visited.contains(next.toString())) continue;
-							queue.add(next);
-							nextLevelCount++;
-						} catch (Exception ignore) {}
+					if (request.isDebugOnlyHome()) {
+						break;
 					}
-					result.getJsPages().clear();
+
+					// 从页面 a[href] 继续发现链接
+					Elements links = doc.select("a[href]");
+					for (Element a : links) {
+						String href = a.attr("abs:href");
+						if (href == null || href.trim().isEmpty()) continue;
+						URI next = safeUri(href);
+						if (next == null) continue;
+						if (request.isSameDomain() && !Objects.equals(next.getHost(), baseHost)) continue;
+						if (!isLikelyHtml(next)) continue;
+						if (visited.contains(next.toString())) continue;
+						queue.add(next);
+						nextLevelCount++;
+					}
+
+					// 将 JS 中收集到的页面加入队列（同域且未访问）
+					if (!result.getJsPages().isEmpty()) {
+						for (String pg : new java.util.HashSet<String>(result.getJsPages())) {
+							try {
+								URI next = safeUri(pg);
+								if (next == null) continue;
+								if (request.isSameDomain() && !Objects.equals(next.getHost(), baseHost)) continue;
+								if (!isLikelyHtml(next)) continue;
+								if (visited.contains(next.toString())) continue;
+								queue.add(next);
+								nextLevelCount++;
+							} catch (Exception ignore) {}
+						}
+						result.getJsPages().clear();
+					}
 				}
 
-				Elements links = doc.select("a[href]");
-				for (Element a : links) {
-					String href = a.attr("abs:href");
-					if (href == null || href.trim().isEmpty()) continue;
-					URI next = safeUri(href);
-					if (next == null) continue;
-					if (request.isSameDomain() && !Objects.equals(next.getHost(), baseHost)) continue;
-					if (!isLikelyHtml(next)) continue;
-					if (visited.contains(next.toString())) continue;
-					queue.add(next);
-					nextLevelCount++;
-				}
 			} catch (Exception ex) {
 				result.addError(uri + " -> " + ex.getMessage());
 			}
