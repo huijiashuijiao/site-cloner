@@ -264,6 +264,43 @@ public class CrawlService {
         // 处理内联样式与 <style> 块中的背景图片（并应用替换）
         processInlineStyles(doc, pageUri, outputDir, localHtmlPath, result, request);
 
+        // 移除 SEO 相关标签（更稳健的白/黑名单+大小写兼容）：
+        // - 策略改为：仅保留白名单 meta（大小写不敏感、支持部分前缀），其它一律移除；不移除任何 <link>
+        try {
+            int removed = 0;
+            String[] keepNames = new String[]{
+                    "district", "viewport", "format-detection", "theme-color",
+                    "renderer", "referrer", "apple-mobile-web-app-capable",
+                    "apple-mobile-web-app-status-bar-style", "description"
+            };
+            for (Element meta : doc.select("head meta")) {
+                if (meta.hasAttr("http-equiv") || meta.hasAttr("charset")) continue;
+                String name = meta.attr("name");
+                String property = meta.attr("property");
+                boolean keep = false;
+                if (name != null && !name.trim().isEmpty()) {
+                    String ln = name.trim().toLowerCase();
+                    if (ln.startsWith("msapplication-")) {
+                        keep = true;
+                    } else {
+                        for (String k : keepNames) { if (ln.equals(k)) { keep = true; break; } }
+                    }
+                }
+                // 若未命中白名单：
+                if (!keep) {
+                    // 带 property（如 og:/twitter:/article:）统一认为非必要，删除
+                    if (property != null && !property.trim().isEmpty()) { meta.remove(); removed++; continue; }
+                    // 有 name 但不在白名单，删除
+                    if (name != null && !name.trim().isEmpty()) { meta.remove(); removed++; continue; }
+                    // 既无 name/property 且非 http-equiv/charset，稳妥删除
+                    meta.remove(); removed++;
+                }
+            }
+            if (removed > 0) {
+                System.out.println("[SEO][META][REMOVED-WHITELIST] " + removed + " from " + pageUri);
+            }
+        } catch (Exception ignore) {}
+
         // 处理 img[srcset] 与懒加载属性
         for (Element img : doc.select("img")) {
             String srcset = img.attr("srcset");
@@ -1177,5 +1214,6 @@ public class CrawlService {
         return true;
     }
 }
+
 
 
