@@ -21,7 +21,7 @@
     <h1 class="mb-4">仿站下载</h1>
     <div class="card mb-3">
         <div class="card-body">
-            <form method="post" th:action="@{/crawl}" th:object="${form}">
+            <form method="post" th:action="@{/crawl}" th:object="${form}" onsubmit="return submitAsync(event)">
                 <div class="mb-3">
                     <label class="form-label">起始 URL</label>
                     <input class="form-control" th:field="*{startUrl}" placeholder="https://example.com"/>
@@ -72,8 +72,11 @@
                     <label class="form-check-label" for="debugOnlyHome">调试模式：只下载首页与首页资源</label>
                 </div>
                 <div class="btn-row">
-                    <button class="btn btn-primary" type="submit">开始下载</button>
+                    <button class="btn btn-primary" type="submit">开始下载（异步）</button>
+                    <a class="btn btn-outline-secondary" href="/tasks">内存任务列表</a>
+                    <a class="btn btn-outline-secondary" href="/tasks/db">数据库任务列表</a>
                     <a class="btn btn-secondary" href="/debug/rewrite-js?file=test.js" target="_blank">调试JS替换（test.js → test2.js）</a>
+                    <button class="btn btn-warning" type="button" onclick="submitMock(event)">提交模拟任务（20秒）</button>
                 </div>
             </form>
         </div>
@@ -88,6 +91,47 @@ function addRule(){
     row.innerHTML = '<input class="form-control" name="replaceRules['+idx+'].find" placeholder="原文字"/>'+
                     '<input class="form-control" name="replaceRules['+idx+'].replaceWith" placeholder="替换为"/>';
     container.appendChild(row);
+}
+
+function submitAsync(e){
+  e.preventDefault();
+  var obj = collectForm(e.target);
+  fetch('/crawl/async', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(obj)})
+    .then(function(r){return r.text();})
+    .then(function(id){ alert('任务已提交，ID: '+id+'\n可在 数据库任务列表 页面查看。'); })
+    .catch(function(err){ alert('提交失败: '+err); });
+  return false;
+}
+
+function collectForm(form){
+  var data = new FormData(form);
+  var obj = {};
+  data.forEach(function(v,k){
+    if(k.endsWith(']')){
+      var m = k.match(/^replaceRules\[(\d+)\]\.(find|replaceWith)$/);
+      if(m){
+        var i = m[1]; var f = m[2];
+        obj.replaceRules = obj.replaceRules || [];
+        obj.replaceRules[+i] = obj.replaceRules[+i] || {};
+        obj.replaceRules[+i][f] = v;
+        return;
+      }
+    }
+    if(v === 'on') v = true;
+    obj[k] = v;
+  });
+  return obj;
+}
+
+function submitMock(e){
+  var form = document.querySelector('form');
+  var obj = collectForm(form);
+  var url = (obj.startUrl || '').toString().trim();
+  if(!url){ alert('请先填写起始URL'); return; }
+  fetch('/crawl/mock', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(obj)})
+    .then(function(r){return r.text();})
+    .then(function(id){ alert('模拟任务已提交，ID: '+id+'\n20秒后变为采集完成。\n可在 数据库任务列表 查看。'); })
+    .catch(function(err){ alert('提交失败: '+err); });
 }
 </script>
 </body>

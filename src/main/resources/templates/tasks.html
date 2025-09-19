@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>采集任务列表</title>
+    <link rel="stylesheet" href="/webjars/bootstrap/5.3.3/css/bootstrap.min.css" />
+</head>
+<body class="p-3">
+<h3>采集任务列表</h3>
+<div class="mb-2">
+    <a href="/" class="btn btn-secondary btn-sm">返回</a>
+    <button class="btn btn-outline-primary btn-sm" onclick="location.reload()">刷新</button>
+</div>
+<table class="table table-sm table-striped align-middle">
+    <thead>
+    <tr>
+        <th>ID</th>
+        <th>状态</th>
+        <th>起始URL</th>
+        <th>线程</th>
+        <th>已下页数</th>
+        <th>资产数</th>
+        <th>错误数</th>
+        <th>开始时间</th>
+        <th>耗时</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr th:each="t : ${tasks}">
+        <td th:text="${t.id}"></td>
+        <td th:text="${t.status}"></td>
+        <td th:text="${t.request.startUrl}"></td>
+        <td th:text="${t.threadName}"></td>
+        <td th:text="${t.pagesDownloaded}"></td>
+        <td th:text="${t.assetsDownloaded}"></td>
+        <td th:text="${t.errorsCount}"></td>
+        <td th:text="${t.startTime}"></td>
+        <td th:text="${t.duration}"></td>
+    </tr>
+    </tbody>
+</table>
+</body>
+</html>
