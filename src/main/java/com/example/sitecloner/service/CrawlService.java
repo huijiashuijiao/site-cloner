@@ -60,6 +60,19 @@ public class CrawlService {
     private static final Pattern IMG_TAG_SRC_NONESC = Pattern.compile("<img[^>]+src\\s*=\\s*(['\\\"])([^'\\\"\\s<>]+\\.(?:png|jpe?g|gif|webp|svg|ico))(?:\\?[^'\\\"<>]*)?\\1", Pattern.CASE_INSENSITIVE);
     // 正则：匹配 JS 字符串中的转义形式 <img ... src=\"...png\">
     private static final Pattern IMG_TAG_SRC_ESC = Pattern.compile("<img[^>]+src\\s*=\\s*\\\\(['\\\"])([^\\\\'\\\"\\s<>]+\\.(?:png|jpe?g|gif|webp|svg|ico))(?:\\?[^\\\\'\\\"<>]*)?\\\\\\1", Pattern.CASE_INSENSITIVE);
+    // 正则：匹配 JS 字符串中非转义的 <link ... href="...css">
+    private static final Pattern LINK_TAG_HREF_NONESC = Pattern.compile("<link[^>]+href\\s*=\\s*(['\\\"])([^'\\\"\\s<>]+\\.css)(?:\\?[^'\\\"<>]*)?\\1", Pattern.CASE_INSENSITIVE);
+    // 正则：匹配 JS 字符串中转义的 <link ... href=\"...css\">
+    private static final Pattern LINK_TAG_HREF_ESC = Pattern.compile("<link[^>]+href\\s*=\\s*\\\\(['\\\"])([^\\\\'\\\"\\s<>]+\\.css)(?:\\?[^\\\\'\\\"<>]*)?\\\\\\1", Pattern.CASE_INSENSITIVE);
+    // 正则：匹配 JS 字符串中非转义的 <script ... src="...js">
+    private static final Pattern SCRIPT_TAG_SRC_NONESC = Pattern.compile("<script[^>]+src\\s*=\\s*(['\\\"])([^'\\\"\\s<>]+\\.js)(?:\\?[^'\\\"<>]*)?\\1", Pattern.CASE_INSENSITIVE);
+    // 正则：匹配 JS 字符串中转义的 <script ... src=\"...js\">
+    private static final Pattern SCRIPT_TAG_SRC_ESC = Pattern.compile("<script[^>]+src\\s*=\\s*\\\\(['\\\"])([^\\\\'\\\"\\s<>]+\\.js)(?:\\?[^\\\\'\\\"<>]*)?\\\\\\1", Pattern.CASE_INSENSITIVE);
+    // 拆分拼接检测（document.write 常见）：href/src 属性值被 ' + " 分割
+    private static final Pattern HREF_CSS_SPLIT1 = Pattern.compile("href\\s*=\\s*\"([^\"]*\\.css)\\s*'\\s*\\+", Pattern.CASE_INSENSITIVE);
+    private static final Pattern HREF_CSS_SPLIT2 = Pattern.compile("href\\s*=\\s*'([^']*\\.css)\\s*\"\\s*\\+", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SRC_JS_SPLIT1  = Pattern.compile("src\\s*=\\s*\"([^\"]*\\.js)\\s*'\\s*\\+", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SRC_JS_SPLIT2  = Pattern.compile("src\\s*=\\s*'([^']*\\.js)\\s*\"\\s*\\+", Pattern.CASE_INSENSITIVE);
 
     public CrawlResult crawl(CrawlRequest request) {
         Instant start = Instant.now();
@@ -161,6 +174,7 @@ public class CrawlService {
                         if (href == null || href.trim().isEmpty()) continue;
                         URI next = safeUri(href);
                         if (next == null) continue;
+                        if (isSitemapXml(next)) { System.out.println("[BFS][SKIP-SITEMAP] " + next); continue; }
                         if (request.isSameDomain() && !Objects.equals(next.getHost(), baseHost)) { System.out.println("[BFS][SKIP-XDOMAIN] " + next); continue; }
                         if (!isLikelyHtml(next)) { System.out.println("[BFS][SKIP-NONHTML] " + next); continue; }
                         if (visited.contains(next.toString())) { System.out.println("[BFS][SKIP-VISITED] " + next); continue; }
@@ -206,6 +220,8 @@ public class CrawlService {
                                     Path localHtmlPath,
                                     CrawlRequest request,
                                     CrawlResult result) throws IOException {
+        // 先确保站点根资源（favicon、templets 下的 js）已准备好，防止后续下载同名资源覆盖
+        try { ensureSiteAssets(outputDir, pageUri); } catch (Exception e) { result.addError("站点资产准备失败: " + e.getMessage()); }
         // 处理常见资源: img[src], script[src], link[href]
         for (Element el : doc.select("img[src], script[src], link[href]")) {
             String attr = el.hasAttr("src") ? "src" : "href";
@@ -213,6 +229,7 @@ public class CrawlService {
             if (abs == null || abs.trim().isEmpty()) continue;
             URI resUri = safeUri(abs);
             if (resUri == null) continue;
+            if (isSitemapXml(resUri)) { System.out.println("[ASSET][SKIP-SITEMAP] " + resUri); continue; }
             try {
                 // 如果是 CSS 样式表，下载文本并解析其中的 url(...)
                 boolean isStylesheet = "link".equalsIgnoreCase(el.tagName()) &&
@@ -238,6 +255,10 @@ public class CrawlService {
                     result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
                 } else {
                     if ("script".equalsIgnoreCase(el.tagName())) {
+                        if (isProtectedSiteAsset(outputDir, resUri)) {
+                            System.out.println("[ASSET][SKIP-PROTECTED][SCRIPT] " + resUri);
+                            continue;
+                        }
                         byte[] bytes = fetchBinary(resUri, pageUri);
                         String jsText = new String(bytes, StandardCharsets.UTF_8);
                         // 先重写 JS 内的跳转链接（外链→/，站内→相对路径并去掉 index.html）
@@ -254,6 +275,10 @@ public class CrawlService {
                         }
                     } else {
                         String key = resUri.toString();
+                        if (isProtectedSiteAsset(outputDir, resUri)) {
+                            System.out.println("[ASSET][SKIP-PROTECTED] " + resUri);
+                            continue;
+                        }
                         if (!result.tryMarkAsset(key)) {
                             System.out.println("[ASSET][SKIP-DUP] " + key);
                         } else {
@@ -274,6 +299,16 @@ public class CrawlService {
         // 处理内联样式与 <style> 块中的背景图片（并应用替换）
         processInlineStyles(doc, pageUri, outputDir, localHtmlPath, result, request);
 
+        // 确保站点根资产（favicon 与 templets 下的 js）已就绪，并在页面中引用
+        try {
+            ensureSiteAssets(outputDir, pageUri);
+            addOrReplaceFavicon(doc);
+            ensureHeadScript(doc, "/templets/gtt.js");
+            if (isHomePage(pageUri)) ensureHeadScript(doc, "/templets/gg.js");
+        } catch (Exception e) {
+            result.addError("站点资产插入失败: " + e.getMessage());
+        }
+
         // 处理页面内联 <script>（无 src）：重写其中的链接并收集页面、提取图片
         try {
             for (Element sc : doc.select("script:not([src])")) {
@@ -281,10 +316,11 @@ public class CrawlService {
                 if (isBlank(js)) js = sc.html();
                 if (isBlank(js)) continue;
                 String rewrittenJs = rewriteJsLinksInContent(js, pageUri, outputDir, localHtmlPath, result);
-                // 替换回页面（使用 text 设置 script 内容）
-                sc.text(rewrittenJs);
+                // HTML 内联脚本专用：将转义引号形式还原为原始引号，例如 \"/path\" -> "/path"
+                String htmlSafeJs = htmlInlineJsUnescapeQuotes(rewrittenJs);
+                sc.text(htmlSafeJs);
                 try {
-                    processJsForAssets(rewrittenJs.getBytes(StandardCharsets.UTF_8), pageUri, pageUri, outputDir, localHtmlPath, result);
+                    processJsForAssets(htmlSafeJs.getBytes(StandardCharsets.UTF_8), pageUri, pageUri, outputDir, localHtmlPath, result);
                 } catch (Exception ignore) {}
             }
         } catch (Exception ignore) {}
@@ -599,16 +635,20 @@ public class CrawlService {
                 Path assetLocal = mapUriToLocalPath(outputDir, abs, false);
                 Files.createDirectories(assetLocal.getParent());
                 String key = abs.toString();
-                if (!result.tryMarkAsset(key)) {
+                if (isProtectedSiteAsset(outputDir, abs)) {
+                    System.out.println("[ASSET][SKIP-PROTECTED][CSS-URL] " + abs);
+                    m.appendReplacement(sb, m.group());
+                } else if (!result.tryMarkAsset(key)) {
                     System.out.println("[ASSET][SKIP-DUP][CSS-URL] " + key);
+                    m.appendReplacement(sb, m.group());
                 } else {
                     byte[] bytes = fetchBinary(abs, baseUri);
                     Files.write(assetLocal, bytes);
                     result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                    String rel = computeRelativePath(currentLocalPath.getParent(), assetLocal);
+                    String replacement = "url('" + rel.replace("$", "\\$") + "')";
+                    m.appendReplacement(sb, Matcher.quoteReplacement(replacement));
                 }
-                String rel = computeRelativePath(currentLocalPath.getParent(), assetLocal);
-                String replacement = "url('" + rel.replace("$", "\\$") + "')";
-                m.appendReplacement(sb, Matcher.quoteReplacement(replacement));
             } catch (Exception ex) {
                 result.addError("CSS 资源下载失败: " + abs + " -> " + ex.getMessage());
                 m.appendReplacement(sb, m.group());
@@ -963,6 +1003,7 @@ public class CrawlService {
         java.util.Set<String> seen = new java.util.HashSet<String>();
 
         int cCss = 0, cQuoted = 0, cToken = 0, cEscDq = 0, cEscSq = 0, cDup = 0, cSkipNotImg = 0;
+        int cLinkTag = 0, cScriptTag = 0, cSplitCss = 0, cSplitJs = 0;
         System.out.println("[JS-ASSET] scan jsUri=" + (jsUri == null ? "inline" : jsUri) + ", referer=" + (referer == null ? "null" : referer));
 
         // 1) 提取 url(...)
@@ -1066,7 +1107,56 @@ public class CrawlService {
             downloadOneAssetFromJs(url, jsUri, referer, outputDir, currentLocalPath, result, "JS-IMG-ESC");
         }
 
-        System.out.println("[JS-ASSET][SUMMARY] cssUrl=" + cCss + ", quoted=" + cQuoted + ", token=" + cToken + ", escDq=" + cEscDq + ", escSq=" + cEscSq + ", dup=" + cDup + ", notImg=" + cSkipNotImg);
+        // 9) 提取通过 document.write 等注入的 <link href="...css"> 与 <script src="...js">
+        java.util.function.Consumer<String> downloadCss = (String href) -> {
+            try {
+                if (isBlank(href)) return;
+                URI abs = (jsUri != null ? jsUri : referer).resolve(href);
+                Path local = mapUriToLocalPath(outputDir, abs, false);
+                Files.createDirectories(local.getParent());
+                if (!result.tryMarkAsset(abs.toString())) { System.out.println("[ASSET][SKIP-DUP][JS-LINK] " + abs); return; }
+                byte[] bytes = fetchBinary(abs, referer);
+                Files.write(local, bytes);
+                result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                System.out.println("[JS-ASSET][DL][LINK] " + abs);
+            } catch (Exception e) { result.addError("JS link css 下载失败: " + href + " -> " + e.getMessage()); }
+        };
+        java.util.function.Consumer<String> downloadJs = (String src) -> {
+            try {
+                if (isBlank(src)) return;
+                URI abs = (jsUri != null ? jsUri : referer).resolve(src);
+                Path local = mapUriToLocalPath(outputDir, abs, false);
+                Files.createDirectories(local.getParent());
+                if (!result.tryMarkAsset(abs.toString())) { System.out.println("[ASSET][SKIP-DUP][JS-SCRIPT] " + abs); return; }
+                byte[] bytes = fetchBinary(abs, referer);
+                // 不对下载的 js 再次解析，避免重复扫描；仅保存
+                Files.write(local, bytes);
+                result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                System.out.println("[JS-ASSET][DL][SCRIPT] " + abs);
+            } catch (Exception e) { result.addError("JS link js 下载失败: " + src + " -> " + e.getMessage()); }
+        };
+        Matcher l1 = LINK_TAG_HREF_NONESC.matcher(js);
+        while (l1.find()) { cLinkTag++; System.out.println("[JS-ASSET][MATCH][LINK] " + l1.group(2)); downloadCss.accept(l1.group(2)); }
+        Matcher l2 = LINK_TAG_HREF_ESC.matcher(js);
+        while (l2.find()) { cLinkTag++; System.out.println("[JS-ASSET][MATCH][LINK-ESC] " + l2.group(2)); downloadCss.accept(l2.group(2)); }
+        Matcher s1 = SCRIPT_TAG_SRC_NONESC.matcher(js);
+        while (s1.find()) { cScriptTag++; System.out.println("[JS-ASSET][MATCH][SCRIPT] " + s1.group(2)); downloadJs.accept(s1.group(2)); }
+        Matcher s2 = SCRIPT_TAG_SRC_ESC.matcher(js);
+        while (s2.find()) { cScriptTag++; System.out.println("[JS-ASSET][MATCH][SCRIPT-ESC] " + s2.group(2)); downloadJs.accept(s2.group(2)); }
+
+        // 探测常见拆分拼接（document.write 场景）：href="...css' +  " / src="...js' +  "
+        try {
+            Matcher sp1 = HREF_CSS_SPLIT1.matcher(js);
+            while (sp1.find()) { cSplitCss++; String u = sp1.group(1); System.out.println("[JS-ASSET][SPLIT][LINK] " + u); downloadCss.accept(u); }
+            Matcher sp2 = HREF_CSS_SPLIT2.matcher(js);
+            while (sp2.find()) { cSplitCss++; String u = sp2.group(1); System.out.println("[JS-ASSET][SPLIT][LINK] " + u); downloadCss.accept(u); }
+            Matcher sp3 = SRC_JS_SPLIT1.matcher(js);
+            while (sp3.find()) { cSplitJs++; String u = sp3.group(1); System.out.println("[JS-ASSET][SPLIT][SCRIPT] " + u); downloadJs.accept(u); }
+            Matcher sp4 = SRC_JS_SPLIT2.matcher(js);
+            while (sp4.find()) { cSplitJs++; String u = sp4.group(1); System.out.println("[JS-ASSET][SPLIT][SCRIPT] " + u); downloadJs.accept(u); }
+        } catch (Exception ignore) {}
+
+        System.out.println("[JS-ASSET][SUMMARY] cssUrl=" + cCss + ", quoted=" + cQuoted + ", token=" + cToken + ", escDq=" + cEscDq + ", escSq=" + cEscSq + ", linkTag=" + cLinkTag + ", scriptTag=" + cScriptTag + ", splitCss=" + cSplitCss + ", splitJs=" + cSplitJs + ", dup=" + cDup + ", notImg=" + cSkipNotImg);
     }
 
     private void downloadOneAssetFromJs(String raw,
@@ -1178,17 +1268,27 @@ public class CrawlService {
                 Path assetLocal = mapUriToLocalPath(outputDir, abs, false);
                 Files.createDirectories(assetLocal.getParent());
                 String key = abs.toString();
-                if (!result.tryMarkAsset(key)) {
+                if (isProtectedSiteAsset(outputDir, abs)) {
+                    System.out.println("[ASSET][SKIP-PROTECTED][SRCSET] " + abs);
+                    String rel = computeRelativePath(currentLocalPath.getParent(), assetLocal);
+                    if (rebuilt.length() > 0) rebuilt.append(", ");
+                    rebuilt.append(rel);
+                    if (!isBlank(descriptor)) rebuilt.append(' ').append(descriptor);
+                } else if (!result.tryMarkAsset(key)) {
                     System.out.println("[ASSET][SKIP-DUP][SRCSET] " + key);
+                    String rel = computeRelativePath(currentLocalPath.getParent(), assetLocal);
+                    if (rebuilt.length() > 0) rebuilt.append(", ");
+                    rebuilt.append(rel);
+                    if (!isBlank(descriptor)) rebuilt.append(' ').append(descriptor);
                 } else {
                     byte[] bytes = fetchBinary(abs, baseUri);
                     Files.write(assetLocal, bytes);
                     result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
+                    String rel = computeRelativePath(currentLocalPath.getParent(), assetLocal);
+                    if (rebuilt.length() > 0) rebuilt.append(", ");
+                    rebuilt.append(rel);
+                    if (!isBlank(descriptor)) rebuilt.append(' ').append(descriptor);
                 }
-                String rel = computeRelativePath(currentLocalPath.getParent(), assetLocal);
-                if (rebuilt.length() > 0) rebuilt.append(", ");
-                rebuilt.append(rel);
-                if (!isBlank(descriptor)) rebuilt.append(' ').append(descriptor);
             } catch (Exception ex) {
                 result.addError("srcset 下载失败: " + item + " -> " + ex.getMessage());
             }
@@ -1210,6 +1310,77 @@ public class CrawlService {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    // 判断是否首页：/ 或 /index.html
+    private static boolean isHomePage(URI pageUri) {
+        String p = pageUri.getPath();
+        if (p == null) return true;
+        if ("/".equals(p)) return true;
+        return "/index.html".equalsIgnoreCase(p);
+    }
+
+    // 将 resources/assets 内的 favicon.ico、gg.js、gtt.js 复制到站点根（favicon）与 /templets（js）
+    private void ensureSiteAssets(Path outputDir, URI pageUri) throws IOException {
+        String host = pageUri.getHost() == null ? "unknown-host" : pageUri.getHost();
+        Path siteRoot = outputDir.resolve(host);
+        Files.createDirectories(siteRoot);
+        // favicon
+        Path fav = siteRoot.resolve("favicon.ico");
+        if (!Files.exists(fav)) copyClasspathAsset("/assets/favicon.ico", fav);
+        // /templets 目录与 js
+        Path templets = siteRoot.resolve("templets");
+        if (!Files.exists(templets)) Files.createDirectories(templets);
+        Path gtt = templets.resolve("gtt.js");
+        if (!Files.exists(gtt)) copyClasspathAsset("/assets/gtt.js", gtt);
+        Path gg = templets.resolve("gg.js");
+        if (!Files.exists(gg)) copyClasspathAsset("/assets/gg.js", gg);
+    }
+
+    private void copyClasspathAsset(String resourcePath, Path target) throws IOException {
+        java.io.InputStream in = null; java.io.OutputStream out = null;
+        try {
+            in = CrawlService.class.getResourceAsStream(resourcePath);
+            if (in == null) throw new IOException("资源不存在: " + resourcePath);
+            out = Files.newOutputStream(target);
+            byte[] buf = new byte[8192]; int r;
+            while ((r = in.read(buf)) != -1) out.write(buf, 0, r);
+        } finally {
+            if (in != null) try { in.close(); } catch (IOException ignore) {}
+            if (out != null) try { out.close(); } catch (IOException ignore) {}
+        }
+    }
+
+    // 删除页面中已有的 icon link 后，插入到 <head> 顶部
+    private void addOrReplaceFavicon(Document doc) {
+        if (doc.head() == null) doc.prependElement("head");
+        for (Element old : doc.select("head link[rel~=(?i)icon], head link[rel='shortcut icon']")) old.remove();
+        Element link = doc.createElement("link");
+        link.attr("rel", "icon");
+        link.attr("type", "image/x-icon");
+        link.attr("href", "/favicon.ico");
+        doc.head().insertChildren(0, link);
+    }
+
+    // 若 head 中不存在该脚本引用，则追加
+    private void ensureHeadScript(Document doc, String src) {
+        if (doc.head() == null) doc.prependElement("head");
+        Element exists = doc.selectFirst("head script[src='" + src + "']");
+        if (exists != null) return;
+        Element s = doc.createElement("script");
+        s.attr("src", src);
+        doc.head().appendChild(s);
+    }
+
+    // 仅作用于 HTML 中的内联 <script> 文本：还原被重写阶段产生的转义引号
+    private String htmlInlineJsUnescapeQuotes(String js) {
+        if (isBlank(js)) return js;
+        String fixed = js
+                .replaceAll("(?i)location\\.href\\s*=\\s*\\\\\"([^\\\\\"]*)\\\\\"", "location.href=\"$1\"")
+                .replaceAll("(?i)location\\.href\\s*=\\s*\\\\'([^\\\\']*)\\\\'", "location.href='$1'")
+                .replaceAll("(?i)window\\.open\\(\\s*\\\\\"([^\\\\\"]*)\\\\\"", "window.open(\"$1\"")
+                .replaceAll("(?i)window\\.open\\(\\s*\\\\'([^\\\\']*)\\\\'", "window.open('$1'");
+        return fixed;
     }
 
     private static String sanitizeFileName(String name) {
@@ -1321,6 +1492,32 @@ public class CrawlService {
         }
         // 无明确扩展：视为 HTML，交给 Jsoup/请求时再判断
         return true;
+    }
+
+    // 防止远端资源覆盖站点内置资产（favicon 与 templets 中的 js）
+    private boolean isProtectedSiteAsset(Path outputDir, URI abs) {
+        try {
+            String host = abs.getHost();
+            if (host == null) return false;
+            Path siteRoot = outputDir.resolve(host);
+            Path target = mapUriToLocalPath(outputDir, abs, false);
+            Path fav = siteRoot.resolve("favicon.ico");
+            Path gtt = siteRoot.resolve("templets").resolve("gtt.js");
+            Path gg = siteRoot.resolve("templets").resolve("gg.js");
+            Path sitemap = siteRoot.resolve("sitemap.xml");
+            return target.equals(fav) || target.equals(gtt) || target.equals(gg) || target.equals(sitemap);
+        } catch (Exception ignore) {
+            return false;
+        }
+    }
+
+    // 判断是否 sitemap.xml
+    private static boolean isSitemapXml(URI uri) {
+        if (uri == null) return false;
+        String p = uri.getPath();
+        if (p == null) return false;
+        String lower = p.toLowerCase();
+        return lower.endsWith("/sitemap.xml") || lower.equals("sitemap.xml");
     }
 }
 
