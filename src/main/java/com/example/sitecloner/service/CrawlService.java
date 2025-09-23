@@ -1398,6 +1398,9 @@ public class CrawlService {
         // favicon
         Path fav = siteRoot.resolve("favicon.ico");
         if (!Files.exists(fav)) copyClasspathAsset("/assets/favicon.ico", fav);
+        // robots.txt 放在站点根
+        Path robots = siteRoot.resolve("robots.txt");
+        if (!Files.exists(robots)) copyClasspathAsset("/assets/robots.txt", robots);
         // /templets 目录与 js
         Path templets = siteRoot.resolve("templets");
         if (!Files.exists(templets)) Files.createDirectories(templets);
@@ -1575,7 +1578,8 @@ public class CrawlService {
             Path gtt = siteRoot.resolve("templets").resolve("gtt.js");
             Path gg = siteRoot.resolve("templets").resolve("gg.js");
             Path sitemap = siteRoot.resolve("sitemap.xml");
-            return target.equals(fav) || target.equals(gtt) || target.equals(gg) || target.equals(sitemap);
+            Path robots = siteRoot.resolve("robots.txt");
+            return target.equals(fav) || target.equals(gtt) || target.equals(gg) || target.equals(sitemap) || target.equals(robots);
         } catch (Exception ignore) {
             return false;
         }
