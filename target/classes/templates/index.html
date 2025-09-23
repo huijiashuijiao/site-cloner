@@ -93,33 +93,92 @@ function addRule(){
     container.appendChild(row);
 }
 
+// 页面加载：若无任意规则行，自动新增一行，避免用户忘记点击“新增一条规则”
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', function(){
+    var container = document.getElementById('rules');
+    if (container && container.children.length === 0) { addRule(); }
+  });
+} else {
+  (function(){
+    var container = document.getElementById('rules');
+    if (container && container.children.length === 0) { addRule(); }
+  })();
+}
+
 function submitAsync(e){
   e.preventDefault();
-  var obj = collectForm(e.target);
+  var form = e.target;
+  // DOM 调试：打印规则行与每个输入框的 name/value
+  try {
+    var rows = form.querySelectorAll('#rules .rule-row');
+    console.log('[DOM][RULE-ROWS]', rows.length);
+    for (var i = 0; i < rows.length; i++) {
+      var inputs = rows[i].querySelectorAll('input');
+      var rowDump = [];
+      for (var j = 0; j < inputs.length; j++) {
+        rowDump.push({ name: inputs[j].name, value: (inputs[j].value || '').toString() });
+      }
+      console.log('[DOM][ROW]['+i+']', rowDump);
+    }
+  } catch (ex) {}
+
+  // 原始 FormData 打印
+  try {
+    var fd = new FormData(form);
+    var entries = [];
+    fd.forEach(function(v,k){ entries.push([k, (v||'').toString()]); });
+    console.log('[FORMDATA][ENTRIES]', entries);
+  } catch (ex) {}
+
+  var obj = collectForm(form);
+  // 调试：提交前打印替换规则数量与最终对象
+  var cnt = (obj.replaceRules && Array.isArray(obj.replaceRules)) ? obj.replaceRules.length : 0;
+  try {
+      console.log('[FORM][REPLACE-RULES][COUNT]', cnt);
+      console.log('[FORM][REPLACE-RULES][OBJ]', JSON.stringify(obj.replaceRules || []));
+  }
+  catch(ex){ }
+
   fetch('/crawl/async', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(obj)})
     .then(function(r){return r.text();})
-    .then(function(id){ alert('任务已提交，ID: '+id+'\n可在 数据库任务列表 页面查看。'); })
-    .catch(function(err){ alert('提交失败: '+err); });
+    .then(function(id){
+        alert('任务已提交，ID: '+id+'\n可在 数据库任务列表 页面查看。');
+    })
+    .catch(function(err){
+        alert('提交失败: '+err);
+    });
   return false;
 }
 
 function collectForm(form){
   var data = new FormData(form);
   var obj = {};
+  // 调试：打印仅与 replaceRules 相关的键
+  try {
+    var rrKeys = [];
+    data.forEach(function(v,k){ if(/^replaceRules\[/i.test(k)) rrKeys.push(k); });
+    console.log('[FORMDATA][RR-KEYS]', rrKeys);
+  } catch(ex){}
+
   data.forEach(function(v,k){
-    if(k.endsWith(']')){
-      var m = k.match(/^replaceRules\[(\d+)\]\.(find|replaceWith)$/);
-      if(m){
-        var i = m[1]; var f = m[2];
-        obj.replaceRules = obj.replaceRules || [];
-        obj.replaceRules[+i] = obj.replaceRules[+i] || {};
-        obj.replaceRules[+i][f] = v;
-        return;
-      }
+    var m = k.match(/^replaceRules\[(\d+)\]\.(find|replaceWith)$/);
+    if(m){
+      var i = m[1]; var f = m[2];
+      obj.replaceRules = obj.replaceRules || [];
+      obj.replaceRules[+i] = obj.replaceRules[+i] || {};
+      obj.replaceRules[+i][f] = (v||'').toString().trim();
+      return;
     }
     if(v === 'on') v = true;
     obj[k] = v;
   });
+  var rawCount = (obj.replaceRules && Array.isArray(obj.replaceRules)) ? obj.replaceRules.length : 0;
+  // 允许 replaceWith 为空字符串（支持“替换为空”）；仅要求 find 非空
+  if (obj.replaceRules && Array.isArray(obj.replaceRules)) {
+    obj.replaceRules = obj.replaceRules.filter(function(r){ return r && r.find && r.find.trim(); });
+  }
+  try { console.log('[FORM][REPLACE-RULES][RAW]', rawCount, '=>[KEPT]', (obj.replaceRules||[]).length); } catch(ex){}
   return obj;
 }
 
@@ -128,6 +187,9 @@ function submitMock(e){
   var obj = collectForm(form);
   var url = (obj.startUrl || '').toString().trim();
   if(!url){ alert('请先填写起始URL'); return; }
+  // 调试：提交前打印替换规则数量
+  var cnt = (obj.replaceRules && Array.isArray(obj.replaceRules)) ? obj.replaceRules.length : 0;
+  try { console.log('[FORM][REPLACE-RULES][COUNT][MOCK]', cnt); } catch(ex){}
   fetch('/crawl/mock', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(obj)})
     .then(function(r){return r.text();})
     .then(function(id){ alert('模拟任务已提交，ID: '+id+'\n20秒后变为采集完成。\n可在 数据库任务列表 查看。'); })

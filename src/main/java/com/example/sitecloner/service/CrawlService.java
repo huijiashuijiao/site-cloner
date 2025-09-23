@@ -636,10 +636,10 @@ public class CrawlService {
                 Files.createDirectories(assetLocal.getParent());
                 String key = abs.toString();
                 if (isProtectedSiteAsset(outputDir, abs)) {
-                    System.out.println("[ASSET][SKIP-PROTECTED][CSS-URL] " + abs);
+//                    System.out.println("[ASSET][SKIP-PROTECTED][CSS-URL] " + abs);
                     m.appendReplacement(sb, m.group());
                 } else if (!result.tryMarkAsset(key)) {
-                    System.out.println("[ASSET][SKIP-DUP][CSS-URL] " + key);
+//                    System.out.println("[ASSET][SKIP-DUP][CSS-URL] " + key);
                     m.appendReplacement(sb, m.group());
                 } else {
                     byte[] bytes = fetchBinary(abs, baseUri);
@@ -995,7 +995,7 @@ public class CrawlService {
         if (jsUri != null) {
             String key = jsUri.toString();
             if (!result.tryMarkJsProcessed(key)) {
-                System.out.println("[JS-ASSET][SKIP-JS-PROCESSED] " + key);
+//                System.out.println("[JS-ASSET][SKIP-JS-PROCESSED] " + key);
                 return;
             }
         }
@@ -1004,16 +1004,24 @@ public class CrawlService {
 
         int cCss = 0, cQuoted = 0, cToken = 0, cEscDq = 0, cEscSq = 0, cDup = 0, cSkipNotImg = 0;
         int cLinkTag = 0, cScriptTag = 0, cSplitCss = 0, cSplitJs = 0;
-        System.out.println("[JS-ASSET] scan jsUri=" + (jsUri == null ? "inline" : jsUri) + ", referer=" + (referer == null ? "null" : referer));
+//        System.out.println("[JS-ASSET] scan jsUri=" + (jsUri == null ? "inline" : jsUri) + ", referer=" + (referer == null ? "null" : referer));
 
         // 1) 提取 url(...)
         Matcher m1 = CSS_URL_PATTERN.matcher(js);
         while (m1.find()) {
             String raw = m1.group(2);
             if (isBlank(raw)) continue;
-            if (!isImagePath(raw)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][CSSURL] " + raw); continue; }
-            if (!seen.add(raw)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][CSSURL] " + raw); continue; }
-            cCss++; System.out.println("[JS-ASSET][MATCH][CSSURL] " + raw);
+            if (!isImagePath(raw)) {
+                cSkipNotImg++;
+//                System.out.println("[JS-ASSET][SKIP-NOT-IMG][CSSURL] " + raw);
+                continue;
+            }
+            if (!seen.add(raw)) {
+                cDup++;
+//                System.out.println("[JS-ASSET][SKIP-DUP][CSSURL] " + raw);
+                continue; }
+            cCss++;
+//            System.out.println("[JS-ASSET][MATCH][CSSURL] " + raw);
             downloadOneAssetFromJs(raw, jsUri, referer, outputDir, currentLocalPath, result, "JS-CSSURL");
         }
 
@@ -1022,9 +1030,16 @@ public class CrawlService {
         while (m2.find()) {
             String raw = m2.group(1);
             if (isBlank(raw)) continue;
-            if (!isImagePath(raw)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][QUOTED] " + raw); continue; }
-            if (!seen.add(raw)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][QUOTED] " + raw); continue; }
-            cQuoted++; System.out.println("[JS-ASSET][MATCH][QUOTED] " + raw);
+            if (!isImagePath(raw)) {
+                cSkipNotImg++;
+//                System.out.println("[JS-ASSET][SKIP-NOT-IMG][QUOTED] " + raw);
+                continue; }
+            if (!seen.add(raw)) {
+                cDup++;
+//                System.out.println("[JS-ASSET][SKIP-DUP][QUOTED] " + raw);
+                continue; }
+            cQuoted++;
+//            System.out.println("[JS-ASSET][MATCH][QUOTED] " + raw);
             downloadOneAssetFromJs(raw, jsUri, referer, outputDir, currentLocalPath, result, "JS-QUOTED");
         }
 
@@ -1033,9 +1048,16 @@ public class CrawlService {
         while (m3.find()) {
             String raw = m3.group(1);
             if (isBlank(raw)) continue;
-            if (!isImagePath(raw)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][TOKEN] " + raw); continue; }
-            if (!seen.add(raw)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][TOKEN] " + raw); continue; }
-            cToken++; System.out.println("[JS-ASSET][MATCH][TOKEN] " + raw);
+            if (!isImagePath(raw)) {
+                cSkipNotImg++;
+//                System.out.println("[JS-ASSET][SKIP-NOT-IMG][TOKEN] " + raw);
+                continue; }
+            if (!seen.add(raw)) {
+                cDup++;
+//                System.out.println("[JS-ASSET][SKIP-DUP][TOKEN] " + raw);
+                continue; }
+            cToken++;
+//            System.out.println("[JS-ASSET][MATCH][TOKEN] " + raw);
             downloadOneAssetFromJs(raw, jsUri, referer, outputDir, currentLocalPath, result, "JS-TOKEN");
         }
 
@@ -1044,9 +1066,16 @@ public class CrawlService {
         while (m4.find()) {
             String raw = m4.group(1);
             if (isBlank(raw)) continue;
-            if (!isImagePath(raw)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][ESC-DQ] " + raw); continue; }
-            if (!seen.add(raw)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][ESC-DQ] " + raw); continue; }
-            cEscDq++; System.out.println("[JS-ASSET][MATCH][ESC-DQ] " + raw);
+            if (!isImagePath(raw)) {
+                cSkipNotImg++;
+//                System.out.println("[JS-ASSET][SKIP-NOT-IMG][ESC-DQ] " + raw);
+                continue; }
+            if (!seen.add(raw)) {
+                cDup++;
+//                System.out.println("[JS-ASSET][SKIP-DUP][ESC-DQ] " + raw);
+                continue; }
+            cEscDq++;
+//            System.out.println("[JS-ASSET][MATCH][ESC-DQ] " + raw);
             downloadOneAssetFromJs(raw, jsUri, referer, outputDir, currentLocalPath, result, "JS-ESC-DQ");
         }
 
@@ -1055,9 +1084,16 @@ public class CrawlService {
         while (m5.find()) {
             String raw = m5.group(1);
             if (isBlank(raw)) continue;
-            if (!isImagePath(raw)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][ESC-SQ] " + raw); continue; }
-            if (!seen.add(raw)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][ESC-SQ] " + raw); continue; }
-            cEscSq++; System.out.println("[JS-ASSET][MATCH][ESC-SQ] " + raw);
+            if (!isImagePath(raw)) {
+                cSkipNotImg++;
+//                System.out.println("[JS-ASSET][SKIP-NOT-IMG][ESC-SQ] " + raw);
+                continue; }
+            if (!seen.add(raw)) {
+                cDup++;
+//                System.out.println("[JS-ASSET][SKIP-DUP][ESC-SQ] " + raw);
+                continue; }
+            cEscSq++;
+//            System.out.println("[JS-ASSET][MATCH][ESC-SQ] " + raw);
             downloadOneAssetFromJs(raw, jsUri, referer, outputDir, currentLocalPath, result, "JS-ESC-SQ");
         }
 
@@ -1068,9 +1104,15 @@ public class CrawlService {
             String url = mAttr1.group(3);
             if (!"src".equals(attr)) continue;
             if (isBlank(url)) continue;
-            if (!isImagePath(url)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][ATTR] " + url); continue; }
-            if (!seen.add(url)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][ATTR] " + url); continue; }
-            System.out.println("[JS-ASSET][MATCH][ATTR] " + url);
+            if (!isImagePath(url)) {
+                cSkipNotImg++;
+//                System.out.println("[JS-ASSET][SKIP-NOT-IMG][ATTR] " + url);
+                continue; }
+            if (!seen.add(url)) {
+                cDup++;
+//                System.out.println("[JS-ASSET][SKIP-DUP][ATTR] " + url);
+                continue; }
+//            System.out.println("[JS-ASSET][MATCH][ATTR] " + url);
             downloadOneAssetFromJs(url, jsUri, referer, outputDir, currentLocalPath, result, "JS-ATTR");
         }
 
@@ -1081,9 +1123,15 @@ public class CrawlService {
             String url = mAttr2.group(2);
             if (!"src".equals(attr)) continue;
             if (isBlank(url)) continue;
-            if (!isImagePath(url)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][ATTR-ESC] " + url); continue; }
-            if (!seen.add(url)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][ATTR-ESC] " + url); continue; }
-            System.out.println("[JS-ASSET][MATCH][ATTR-ESC] " + url);
+            if (!isImagePath(url)) {
+                cSkipNotImg++;
+//                System.out.println("[JS-ASSET][SKIP-NOT-IMG][ATTR-ESC] " + url);
+                continue; }
+            if (!seen.add(url)) {
+                cDup++;
+//                System.out.println("[JS-ASSET][SKIP-DUP][ATTR-ESC] " + url);
+                continue; }
+//            System.out.println("[JS-ASSET][MATCH][ATTR-ESC] " + url);
             downloadOneAssetFromJs(url, jsUri, referer, outputDir, currentLocalPath, result, "JS-ATTR-ESC");
         }
 
@@ -1092,18 +1140,26 @@ public class CrawlService {
         while (mImg1.find()) {
             String url = mImg1.group(2);
             if (isBlank(url)) continue;
-            if (!isImagePath(url)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][IMG] " + url); continue; }
-            if (!seen.add(url)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][IMG] " + url); continue; }
-            System.out.println("[JS-ASSET][MATCH][IMG] " + url);
+            if (!isImagePath(url)) { cSkipNotImg++;
+                //System.out.println("[JS-ASSET][SKIP-NOT-IMG][IMG] " + url);
+                 continue; }
+            if (!seen.add(url)) { cDup++;
+//                System.out.println("[JS-ASSET][SKIP-DUP][IMG] " + url);
+                continue; }
+//            System.out.println("[JS-ASSET][MATCH][IMG] " + url);
             downloadOneAssetFromJs(url, jsUri, referer, outputDir, currentLocalPath, result, "JS-IMG");
         }
         Matcher mImg2 = IMG_TAG_SRC_ESC.matcher(js);
         while (mImg2.find()) {
             String url = mImg2.group(2);
             if (isBlank(url)) continue;
-            if (!isImagePath(url)) { cSkipNotImg++; System.out.println("[JS-ASSET][SKIP-NOT-IMG][IMG-ESC] " + url); continue; }
-            if (!seen.add(url)) { cDup++; System.out.println("[JS-ASSET][SKIP-DUP][IMG-ESC] " + url); continue; }
-            System.out.println("[JS-ASSET][MATCH][IMG-ESC] " + url);
+            if (!isImagePath(url)) { cSkipNotImg++;
+//                System.out.println("[JS-ASSET][SKIP-NOT-IMG][IMG-ESC] " + url);
+                continue; }
+            if (!seen.add(url)) { cDup++;
+                //System.out.p/rintln("[JS-ASSET][SKIP-DUP][IMG-ESC] " + url);
+                continue; }
+            //System.out.println("[JS-ASSET][MATCH][IMG-ESC] " + url);
             downloadOneAssetFromJs(url, jsUri, referer, outputDir, currentLocalPath, result, "JS-IMG-ESC");
         }
 
@@ -1114,11 +1170,13 @@ public class CrawlService {
                 URI abs = (jsUri != null ? jsUri : referer).resolve(href);
                 Path local = mapUriToLocalPath(outputDir, abs, false);
                 Files.createDirectories(local.getParent());
-                if (!result.tryMarkAsset(abs.toString())) { System.out.println("[ASSET][SKIP-DUP][JS-LINK] " + abs); return; }
+                if (!result.tryMarkAsset(abs.toString())) {
+//                    System.out.println("[ASSET][SKIP-DUP][JS-LINK] " + abs);
+                    return; }
                 byte[] bytes = fetchBinary(abs, referer);
                 Files.write(local, bytes);
                 result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
-                System.out.println("[JS-ASSET][DL][LINK] " + abs);
+//                System.out.println("[JS-ASSET][DL][LINK] " + abs);
             } catch (Exception e) { result.addError("JS link css 下载失败: " + href + " -> " + e.getMessage()); }
         };
         java.util.function.Consumer<String> downloadJs = (String src) -> {
@@ -1127,22 +1185,34 @@ public class CrawlService {
                 URI abs = (jsUri != null ? jsUri : referer).resolve(src);
                 Path local = mapUriToLocalPath(outputDir, abs, false);
                 Files.createDirectories(local.getParent());
-                if (!result.tryMarkAsset(abs.toString())) { System.out.println("[ASSET][SKIP-DUP][JS-SCRIPT] " + abs); return; }
+                if (!result.tryMarkAsset(abs.toString())) {
+//                    System.out.println("[ASSET][SKIP-DUP][JS-SCRIPT] " + abs);
+                    return; }
                 byte[] bytes = fetchBinary(abs, referer);
                 // 不对下载的 js 再次解析，避免重复扫描；仅保存
                 Files.write(local, bytes);
                 result.setAssetsDownloaded(result.getAssetsDownloaded() + 1);
-                System.out.println("[JS-ASSET][DL][SCRIPT] " + abs);
+//                System.out.println("[JS-ASSET][DL][SCRIPT] " + abs);
             } catch (Exception e) { result.addError("JS link js 下载失败: " + src + " -> " + e.getMessage()); }
         };
         Matcher l1 = LINK_TAG_HREF_NONESC.matcher(js);
-        while (l1.find()) { cLinkTag++; System.out.println("[JS-ASSET][MATCH][LINK] " + l1.group(2)); downloadCss.accept(l1.group(2)); }
+        while (l1.find()) { cLinkTag++;
+            System.out.println("[JS-ASSET][MATCH][LINK] " + l1.group(2));
+            downloadCss.accept(l1.group(2));
+        }
         Matcher l2 = LINK_TAG_HREF_ESC.matcher(js);
-        while (l2.find()) { cLinkTag++; System.out.println("[JS-ASSET][MATCH][LINK-ESC] " + l2.group(2)); downloadCss.accept(l2.group(2)); }
+        while (l2.find()) { cLinkTag++;
+            System.out.println("[JS-ASSET][MATCH][LINK-ESC] " + l2.group(2));
+            downloadCss.accept(l2.group(2));
+        }
         Matcher s1 = SCRIPT_TAG_SRC_NONESC.matcher(js);
-        while (s1.find()) { cScriptTag++; System.out.println("[JS-ASSET][MATCH][SCRIPT] " + s1.group(2)); downloadJs.accept(s1.group(2)); }
+        while (s1.find()) { cScriptTag++;
+            System.out.println("[JS-ASSET][MATCH][SCRIPT] " + s1.group(2));
+            downloadJs.accept(s1.group(2)); }
         Matcher s2 = SCRIPT_TAG_SRC_ESC.matcher(js);
-        while (s2.find()) { cScriptTag++; System.out.println("[JS-ASSET][MATCH][SCRIPT-ESC] " + s2.group(2)); downloadJs.accept(s2.group(2)); }
+        while (s2.find()) { cScriptTag++;
+            System.out.println("[JS-ASSET][MATCH][SCRIPT-ESC] " + s2.group(2));
+            downloadJs.accept(s2.group(2)); }
 
         // 探测常见拆分拼接（document.write 场景）：href="...css' +  " / src="...js' +  "
         try {
