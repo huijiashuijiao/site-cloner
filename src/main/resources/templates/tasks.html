@@ -23,6 +23,7 @@
         <th>错误数</th>
         <th>开始时间</th>
         <th>耗时</th>
+        <th>操作</th>
     </tr>
     </thead>
     <tbody>
@@ -36,8 +37,22 @@
         <td th:text="${t.errorsCount}"></td>
         <td th:text="${t.startTime}"></td>
         <td th:text="${t.duration}"></td>
+        <td>
+            <button class="btn btn-sm btn-outline-danger" th:attr="data-id=${t.id}" onclick="cancelTask(this)">取消</button>
+        </td>
     </tr>
     </tbody>
 </table>
+<script>
+function cancelTask(btn){
+  var id = btn.getAttribute('data-id');
+  if(!id) return;
+  if(!confirm('确认取消任务: '+id+' ?')) return;
+  fetch('/crawl/tasks/'+id+'/cancel', {method:'POST'})
+    .then(function(r){return r.text();})
+    .then(function(tx){ alert('取消结果: '+tx); location.reload(); })
+    .catch(function(err){ alert('取消失败: '+err); });
+}
+</script>
 </body>
 </html>

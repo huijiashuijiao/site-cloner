@@ -20,6 +20,7 @@ public class CrawlManager {
     private final CrawlTaskRepository repo;
     private ExecutorService executor;
     private final ConcurrentHashMap<String, CrawlTask> tasks = new ConcurrentHashMap<String, CrawlTask>();
+    private final ConcurrentHashMap<String, Future<?>> futures = new ConcurrentHashMap<String, Future<?>>();
 
     public CrawlManager(CrawlService crawlService, CrawlTaskRepository repo) {
         this.crawlService = crawlService;
@@ -65,22 +66,16 @@ public class CrawlManager {
         entity.setOutputName(request.getOutputName());
         entity.setTitleSuffix(request.getTitleSuffix());
         entity.setSitemapDomain(request.getSitemapDomain());
-        if (request.getReplaceRules() != null && !request.getReplaceRules().isEmpty()) {
-            StringBuilder rr = new StringBuilder();
-            for (com.example.sitecloner.model.ReplacementRule r : request.getReplaceRules()) {
-                if (r == null) continue;
-                String f = r.getFind();
-                String w = r.getReplaceWith();
-                if (f == null) f = "";
-                if (w == null) w = "";
-                if (rr.length() > 0) rr.append("\n");
-                rr.append(f.replace("\n","\\n")).append(" => ").append(w.replace("\n","\\n"));
-            }
-            entity.setReplaceRulesJson(rr.toString());
+        // 以 JSON 形式保存替换规则
+        if (request.getReplaceRules() != null) {
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+                entity.setReplaceRulesJson(om.writeValueAsString(request.getReplaceRules()));
+            } catch (Exception ignore) {}
         }
         repo.save(entity);
 
-        executor.submit(new Runnable() {
+        Future<?> f = executor.submit(new Runnable() {
             public void run() {
                 task.setStatus(CrawlTask.Status.RUNNING);
                 task.setStartTime(Instant.now());
@@ -118,7 +113,25 @@ public class CrawlManager {
                 }
             }
         });
+        futures.put(task.getId(), f);
         return task;
+    }
+
+    public boolean cancel(String id) {
+        Future<?> f = futures.get(id);
+        if (f == null) return false;
+        boolean ok = f.cancel(true);
+        try {
+            CrawlTaskEntity e = repo.findByTaskUuid(id);
+            if (e != null) {
+                e.setStatus("已取消");
+                e.setEndTime(Instant.now());
+                repo.save(e);
+            }
+        } catch (Exception ignore) {}
+        CrawlTask t = tasks.get(id);
+        if (t != null) t.setStatus(CrawlTask.Status.FAILED);
+        return ok;
     }
 
     public String submitMock(final com.example.sitecloner.model.CrawlRequest form) {
@@ -134,20 +147,15 @@ public class CrawlManager {
         entity.setOutputName(form.getOutputName());
         entity.setTitleSuffix(form.getTitleSuffix());
         entity.setSitemapDomain(form.getSitemapDomain());
-        if (form.getReplaceRules() != null && !form.getReplaceRules().isEmpty()) {
-            StringBuilder rr = new StringBuilder();
-            for (com.example.sitecloner.model.ReplacementRule r : form.getReplaceRules()) {
-                if (r == null) continue;
-                String f = r.getFind(); if (f == null) f = "";
-                String w = r.getReplaceWith(); if (w == null) w = "";
-                if (rr.length() > 0) rr.append("\n");
-                rr.append(f.replace("\n","\\n")).append(" => ").append(w.replace("\n","\\n"));
-            }
-            entity.setReplaceRulesJson(rr.toString());
+        if (form.getReplaceRules() != null) {
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+                entity.setReplaceRulesJson(om.writeValueAsString(form.getReplaceRules()));
+            } catch (Exception ignore) {}
         }
         repo.save(entity);
 
-        executor.submit(new Runnable() {
+        Future<?> f = executor.submit(new Runnable() {
             public void run() {
                 try {
                     entity.setStatus("采集中");
@@ -166,40 +174,42 @@ public class CrawlManager {
                 }
             }
         });
+        futures.put(uuid, f);
         return uuid;
     }
 
     public String submitMock(final String startUrl) {
-		final String uuid = java.util.UUID.randomUUID().toString();
-		final com.example.sitecloner.model.CrawlTaskEntity entity = new com.example.sitecloner.model.CrawlTaskEntity();
-		entity.setTaskUuid(uuid);
-		entity.setStatus("未开始");
-		entity.setStartUrl(startUrl);
-		repo.save(entity);
+        final String uuid = java.util.UUID.randomUUID().toString();
+        final com.example.sitecloner.model.CrawlTaskEntity entity = new com.example.sitecloner.model.CrawlTaskEntity();
+        entity.setTaskUuid(uuid);
+        entity.setStatus("未开始");
+        entity.setStartUrl(startUrl);
+        repo.save(entity);
 
-		executor.submit(new Runnable() {
-			public void run() {
-				try {
-					entity.setStatus("采集中");
-					entity.setStartTime(java.time.Instant.now());
-					entity.setThreadName(Thread.currentThread().getName());
-					repo.save(entity);
+        Future<?> f = executor.submit(new Runnable() {
+            public void run() {
+                try {
+                    entity.setStatus("采集中");
+                    entity.setStartTime(java.time.Instant.now());
+                    entity.setThreadName(Thread.currentThread().getName());
+                    repo.save(entity);
 
-					try { Thread.sleep(20000L); } catch (InterruptedException ignored) {}
+                    try { Thread.sleep(20000L); } catch (InterruptedException ignored) {}
 
-					entity.setStatus("采集完成");
-					entity.setEndTime(java.time.Instant.now());
-					repo.save(entity);
-				} catch (Throwable ex) {
-					entity.setStatus("采集失败");
-					entity.setErrorMessage(ex.getMessage());
-					entity.setEndTime(java.time.Instant.now());
-					repo.save(entity);
-				}
-			}
-		});
-		return uuid;
-	}
+                    entity.setStatus("采集完成");
+                    entity.setEndTime(java.time.Instant.now());
+                    repo.save(entity);
+                } catch (Throwable ex) {
+                    entity.setStatus("采集失败");
+                    entity.setErrorMessage(ex.getMessage());
+                    entity.setEndTime(java.time.Instant.now());
+                    repo.save(entity);
+                }
+            }
+        });
+        futures.put(uuid, f);
+        return uuid;
+    }
 
     public CrawlTask get(String id) {
         return tasks.get(id);

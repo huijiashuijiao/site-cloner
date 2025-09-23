@@ -77,14 +77,17 @@ public class AdminController {
         java.util.List<com.example.sitecloner.model.ReplacementRule> rr = form.getReplaceRules();
         if (rr != null) {
             System.out.println("[FORM][ASYNC][REPLACE-RULES] size=" + rr.size());
-            for (int i = 0; i < rr.size(); i++) {
-                com.example.sitecloner.model.ReplacementRule r = rr.get(i);
-                if (r == null) continue;
-                System.out.println("  [" + i + "] find='" + r.getFind() + "' -> replaceWith='" + r.getReplaceWith() + "'");
-            }
         }
         CrawlTask task = crawlManager.submit(form);
         return ResponseEntity.ok(task.getId());
+    }
+
+    // 取消任务
+    @PostMapping("/crawl/tasks/{id}/cancel")
+    @ResponseBody
+    public ResponseEntity<String> cancelTask(@PathVariable("id") String id) {
+        boolean ok = crawlManager.cancel(id);
+        return ResponseEntity.ok(ok ? "OK" : "NotFoundOrFinished");
     }
 
     // 查询任务详情
