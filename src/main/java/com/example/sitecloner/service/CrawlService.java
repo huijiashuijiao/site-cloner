@@ -77,29 +77,38 @@ public class CrawlService {
     public CrawlResult crawl(CrawlRequest request) {
         Instant start = Instant.now();
         CrawlResult result = new CrawlResult();
+        Path outputDir = null;
+        String baseHost = null;
         try {
             URI startUri = normalizeUri(request.getStartUrl());
-            String baseHost = startUri.getHost();
+            baseHost = startUri.getHost();
             String outputDirName = (!isBlank(request.getOutputName()))
                     ? request.getOutputName()
                     : sanitizeFileName(baseHost);
             Path baseDir = Paths.get(sanitizePathConfig(storageProperties.getOutputBaseDir()));
-            Path outputDir = baseDir.resolve(outputDirName);
+            outputDir = baseDir.resolve(outputDirName);
             Files.createDirectories(outputDir);
 
             breadthFirstCrawl(startUri, baseHost, request, outputDir, result);
-
-            // 生成 sitemap.xml（放在站点根：outputDir/<host>/sitemap.xml）
-            try {
-                generateSitemap(outputDir, baseHost, request, result);
-            } catch (Exception e) {
-                result.addError("生成 sitemap.xml 失败: " + e.getMessage());
-            }
 
             result.setOutputDirectory(outputDir.toAbsolutePath().toString());
         } catch (Exception e) {
             result.addError(e.getMessage());
         } finally {
+            System.out.println("进入了finally ");
+            // 无论正常结束、异常或中断，尽力写入 sitemap（基于已采集页面）
+            try {
+                if (outputDir != null) {
+                    generateSitemap(outputDir, baseHost, request, result);
+                    System.out.println("[SITEMAP][WRITE-FINALLY] host=" + (baseHost==null?"unknown":baseHost)
+                            + ", pages=" + (result.getPages()==null?0:result.getPages().size())
+                            + ", outputDir=" + outputDir.toAbsolutePath());
+                }
+            } catch (Exception e) {
+                result.addError("生成 sitemap.xml 失败: " + e.getMessage());
+                System.out.println("[SITEMAP][ERROR] " + e.getMessage());
+            }
+            System.out.println("进入了finally 2");
             result.setElapsed(Duration.between(start, Instant.now()));
         }
         return result;
@@ -143,6 +152,12 @@ public class CrawlService {
                 continue;
             }
             visited.add(key);
+            // 记录页面到结果（即使后续被中断或失败，也能用于 sitemap）
+            result.addPage(key);
+            if (Thread.currentThread().isInterrupted()) {
+                System.out.println("[BFS][CANCELLED] depth=" + depth + ", visited=" + visited.size() + ", queue=" + queue.size());
+                break;
+            }
             System.out.println("[BFS][VISIT] depth=" + depth + " -> " + uri);
 
             try {
@@ -677,38 +692,70 @@ public class CrawlService {
                                  String host,
                                  CrawlRequest request,
                                  CrawlResult result) throws IOException {
-        if (host == null) host = "unknown-host";
-        Path siteRoot = outputDir.resolve(host);
-        Files.createDirectories(siteRoot);
-        String domain = request.getSitemapDomain();
-        if (isBlank(domain)) {
-            domain = "https://" + host;
+        boolean wasInterrupted = Thread.currentThread().isInterrupted();
+        if (wasInterrupted) {
+            System.out.println("[SITEMAP][NOTE] thread was interrupted, clearing flag to allow file write");
+            Thread.interrupted(); // 清除中断标志以避免 NIO 写入被中断
         }
-        domain = domain.trim();
-        if (domain.endsWith("/")) domain = domain.substring(0, domain.length() - 1);
+        try {
+            if (host == null) host = "unknown-host";
+            Path siteRoot = outputDir.resolve(host);
+            Files.createDirectories(siteRoot);
+            String domain = request.getSitemapDomain();
+            if (isBlank(domain)) {
+                domain = "https://" + host;
+            }
+            domain = domain.trim();
+            if (domain.endsWith("/")) domain = domain.substring(0, domain.length() - 1);
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        sb.append("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
-        String today = LocalDate.now().toString();
-        for (String absUrl : result.getPages()) {
+            System.out.println("[SITEMAP][BEGIN] host=" + host
+                    + ", domain=" + domain
+                    + ", pages=" + (result.getPages()==null?0:result.getPages().size())
+                    + ", file=" + siteRoot.resolve("sitemap.xml").toAbsolutePath());
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+            sb.append("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
+            String today = LocalDate.now().toString();
+            java.util.List<String> toWrite;
+            if (result.getPages() == null || result.getPages().isEmpty()) {
+                toWrite = new java.util.ArrayList<String>();
+                if (!isBlank(request.getStartUrl())) toWrite.add(request.getStartUrl());
+            } else {
+                toWrite = new java.util.ArrayList<String>(result.getPages());
+            }
+            for (String absUrl : toWrite) {
+                try {
+                    URI u = new URI(absUrl);
+                    String path = u.getPath();
+                    if (isBlank(path)) path = "/";
+                    if (!path.contains(".") && !path.endsWith("/")) path = path + "/";
+                    String loc = domain + path;
+                    sb.append("  <url>\n");
+                    sb.append("    <loc").append(">").append(escapeXml(loc)).append("</loc>\n");
+                    sb.append("    <lastmod>").append(today).append("</lastmod>\n");
+                    sb.append("    <changefreq>weekly</changefreq>\n");
+                    sb.append("    <priority>0.5</priority>\n");
+                    sb.append("  </url>\n");
+                } catch (Exception urlEx) {
+                    System.out.println("[SITEMAP][URL-SKIP] " + absUrl + " -> " + urlEx);
+                }
+            }
+            sb.append("</urlset>\n");
             try {
-                URI u = new URI(absUrl);
-                String path = u.getPath();
-                if (isBlank(path)) path = "/";
-                // 目录页标准化：以 / 结尾
-                if (!path.contains(".") && !path.endsWith("/")) path = path + "/";
-                String loc = domain + path;
-                sb.append("  <url>\n");
-                sb.append("    <loc").append(">").append(escapeXml(loc)).append("</loc>\n");
-                sb.append("    <lastmod").append(">").append(today).append("</lastmod>\n");
-                sb.append("    <changefreq>weekly</changefreq>\n");
-                sb.append("    <priority>0.5</priority>\n");
-                sb.append("  </url>\n");
-            } catch (Exception ignore) {}
+                Files.write(siteRoot.resolve("sitemap.xml"), sb.toString().getBytes(StandardCharsets.UTF_8));
+                System.out.println("[SITEMAP][DONE] file=" + siteRoot.resolve("sitemap.xml").toAbsolutePath()
+                        + ", urls=" + toWrite.size());
+            } catch (IOException ioEx) {
+                System.out.println("[SITEMAP][WRITE-FAIL] file=" + siteRoot.resolve("sitemap.xml").toAbsolutePath() + " -> " + ioEx);
+                throw ioEx;
+            }
+        } finally {
+            if (wasInterrupted) {
+                // 恢复中断标志，保持调用方语义
+                Thread.currentThread().interrupt();
+            }
         }
-        sb.append("</urlset>\n");
-        Files.write(siteRoot.resolve("sitemap.xml"), sb.toString().getBytes(StandardCharsets.UTF_8));
     }
 
     private static String escapeXml(String s) {
@@ -1287,7 +1334,7 @@ public class CrawlService {
                         .bodyAsBytes();
             } catch (IOException ex) {
                 last = ex;
-                try { Thread.sleep(500L * attempts); } catch (InterruptedException ignored) {}
+                try { Thread.sleep(500L * attempts); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); throw new IOException("interrupted", last); }
             }
         }
         throw last == null ? new IOException("Unknown download error") : last;
